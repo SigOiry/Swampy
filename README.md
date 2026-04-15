@@ -33,7 +33,18 @@ Keep this folder structure unchanged. The GUI expects these relative paths.
 
 ## 🧰 Requirements
 
-The recommended setup uses Conda and the provided environment file:
+The recommended setup uses Git plus Conda and the provided environment file.
+
+If you want to do the full installation from the command line:
+
+```powershell
+git clone https://github.com/SigOiry/Swampy.git
+cd Swampy
+conda env create -f environment.yml
+conda activate SwampySim
+```
+
+If the repository is already on your machine, you can start directly from the environment setup:
 
 ```powershell
 conda env create -f environment.yml
