@@ -1,0 +1,122 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Feb  6 19:08:35 2017
+
+@author: Marco
+"""
+
+import sambuca as sb
+import numpy as np
+import math
+from multiprocessing import Pool, cpu_count, set_start_method
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+
+low_relax = 0.5
+high_relax = 2.0
+
+
+def constraint_sum_to_one(x):
+    return 1 - (x[4] + x[5] + x[6])
+
+
+def constraint_sum_to_one_jac(x):
+    return np.array([0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -1.0])
+
+
+def constraint_upper_relaxed(x):
+    return high_relax - (x[4] + x[5] + x[6])
+
+
+def constraint_upper_relaxed_jac(x):
+    return np.array([0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -1.0])
+
+
+def constraint_lower_relaxed(x):
+    return (x[4] + x[5] + x[6]) - low_relax
+
+
+def constraint_lower_relaxed_jac(x):
+    return np.array([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+
+
+def minimize_pixel(args):
+    x, y, obs_rrs, p0, opt_met, bounds, cons, shallow, objective = args
+
+    if (not np.allclose(obs_rrs, 0)) and (not np.isnan(obs_rrs).any()):
+        result = sb.minimize(
+            objective,
+            p0,
+            method=opt_met,
+            bounds=bounds,
+            constraints=cons,
+            options={'disp': False, 'maxiter': 100},
+            obs_rrs=obs_rrs
+        )
+
+        return x, y, obs_rrs, result.x, result.nit, result.success
+    else:
+        return x, y, obs_rrs, None, None, False
+
+
+def output_calculation(observed_rrs, objective, siop, result_recorder, image_info, opt_met, relaxed, shallow=False, free_cpu=0):
+    skip_count = 0
+
+    # Define a region to process in the image input
+    # *****Observed data is in band, row(height, x), column(width, y)******
+    xend = image_info['observed_rrs_height']
+    yend = image_info['observed_rrs_width']
+
+    xstart, ystart = 0, 0
+
+    p0 = (np.array(siop['p_max']) + np.array(siop['p_min'])) / 2
+    p0[3] = 10 ** ((math.log10(np.array(siop['p_max'][3])) + math.log10(np.array(siop['p_min'][3]))) / 2)
+
+    # set some relaxed abundance constraints (RASC) after Petit et. al.(2017)******
+    if relaxed:
+        cons = (
+            {'type': 'ineq', 'fun': constraint_upper_relaxed, 'jac': constraint_upper_relaxed_jac},
+            {'type': 'ineq', 'fun': constraint_lower_relaxed, 'jac': constraint_lower_relaxed_jac}
+        )
+    else:
+        cons = (
+            {'type': 'eq', 'fun': constraint_sum_to_one, 'jac': constraint_sum_to_one_jac},
+        )
+
+    print('Creating chucks...')
+    pixel_args = []
+    for x in range(xstart, xend):
+        for y in range(ystart, yend):
+            obs_rrs = observed_rrs[:, x, y]
+            pixel_args.append((x, y, obs_rrs, p0.copy(), opt_met, siop['p_bounds'], cons, shallow, objective))
+
+    print("Setting start method to spawn")
+    set_start_method("spawn", force=True)
+    print("Starting multiprocessing minimize...")
+    with ProcessPoolExecutor(max_workers=cpu_count() - free_cpu) as pool:
+        results = list(tqdm(pool.map(minimize_pixel, pixel_args), total=len(pixel_args)))
+        # results = pool.map(minimize_pixel, pixel_args)
+
+    print('Analyzing results...')
+    for res in tqdm(results):
+        x, y, obs_rrs, result_x, nit, success = res
+        if result_x is not None:
+            result_recorder(x, y, obs_rrs, parameters=sb.FreeParameters(*result_x), nit=nit, success=success)
+            if shallow:
+                while np.floor(result_recorder.sdi[x, y]) == 0:
+                    old_sdi = result_recorder.sdi[x, y]
+                    depth_sdi0 = result_x[3]
+                    result_x[3] = depth_sdi0 * 0.95
+                    result_recorder(x, y, obs_rrs, parameters=sb.FreeParameters(*result_x), nit=nit, success=success)
+                    if np.floor(result_recorder.sdi[x, y]) > 0:
+                        result_x[3] = depth_sdi0
+                        result_recorder(x, y, obs_rrs, parameters=sb.FreeParameters(*result_x), nit=nit, success=success)
+                        break
+                    if abs(old_sdi - result_recorder.sdi[x, y]) < 1e-7:
+                        result_x[3] = depth_sdi0
+                        result_recorder(x, y, obs_rrs, parameters=sb.FreeParameters(*result_x), nit=nit, success=success)
+                        break
+        else:
+            skip_count += 1
+
+    return result_recorder

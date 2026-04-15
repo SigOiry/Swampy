@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(conda run:*)",
+      "Bash(where python:*)",
+      "Bash(python -c \"import numpy; print\\('numpy', numpy.__version__\\)\")",
+      "Read(//c/Users/Simon/miniconda3/envs/SwampySim/**)",
+      "Read(//c/Users/Simon/anaconda3/envs/SwampySim/**)",
+      "Read(//c/ProgramData/miniconda3/envs/SwampySim/**)",
+      "Read(//c/Users/Simon/AppData/Local/miniconda3/envs/SwampySim/**)",
+      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -c \"import numpy; print\\('numpy', numpy.__version__\\)\")",
+      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -c \"import numba; print\\('numba', numba.__version__\\)\")",
+      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -c \"import scipy; print\\('scipy', scipy.__version__\\)\")",
+      "Bash(/c/Users/Simon/miniconda3/condabin/conda.bat search:*)",
+      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -c \"import numba; import numpy; print\\('numba', numba.__version__, '| numpy', numpy.__version__\\)\")",
+      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -)"
+    ]
+  }
+}

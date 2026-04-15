@@ -1,0 +1,91 @@
+from __future__ import (
+    absolute_import,
+    division,
+    print_function,
+    unicode_literals)
+from builtins import *
+
+from pkg_resources import resource_filename
+
+import numpy as np
+from scipy.io import readsav
+
+import sambuca as sb
+
+
+def _expected_terms(observed, modelled, nedr=None):
+    weights = np.ones_like(observed, dtype=float) if nedr is None else 1.0 / np.asarray(nedr, dtype=float)
+    weights = np.clip(weights, 1e-12, None)
+    observed = np.asarray(observed, dtype=float)
+    modelled = np.asarray(modelled, dtype=float)
+
+    alpha_num = np.sum(weights * observed * modelled)
+    alpha_den = np.sqrt(np.sum(weights * observed * observed)) * np.sqrt(np.sum(weights * modelled * modelled))
+    alpha = np.arccos(np.clip(alpha_num / alpha_den, 0.0, 1.0))
+
+    lsq = np.sqrt(np.sum(weights * (modelled - observed) ** 2)) / np.sum(weights * observed)
+    return alpha, alpha * lsq, lsq
+
+
+class TestErrorNoNoise(object):
+    """ Error function tests, without noise. """
+
+    def setup_method(self, method):
+        self.data = readsav(
+            resource_filename(
+                sb.__name__,
+                'tests/data/no_noise_error_data.sav'))
+
+    def test_validate_data(self):
+        observed = self.data['realrrs']
+        modelled = self.data['rrs']
+
+        assert len(modelled) == len(observed)
+
+    def test_error_all(self):
+        observed = self.data['realrrs']
+        modelled = self.data['rrs']
+        expected_distance_a, expected_distance_af, expected_lsq = _expected_terms(observed, modelled)
+
+        actual = sb.error_all(observed, modelled)
+
+        assert np.allclose(actual.alpha, expected_distance_a)
+        assert np.allclose(actual.alpha_f, expected_distance_af)
+        assert np.allclose(actual.f, expected_lsq)
+        assert np.allclose(actual.lsq, expected_lsq)
+
+    def test_distance_alpha(self):
+        observed = self.data['realrrs']
+        modelled = self.data['rrs']
+        expected = _expected_terms(observed, modelled)[0]
+
+        actual = sb.distance_alpha(observed, modelled)
+
+        assert np.allclose(actual, expected)
+
+    def test_distance_alpha_f(self):
+        observed = self.data['realrrs']
+        modelled = self.data['rrs']
+        expected = _expected_terms(observed, modelled)[1]
+
+        actual = sb.distance_alpha_f(observed, modelled)
+
+        assert np.allclose(actual, expected)
+
+    def test_distance_f(self):
+        observed = self.data['realrrs']
+        modelled = self.data['rrs']
+        expected = _expected_terms(observed, modelled)[2]
+
+        actual = sb.distance_f(observed, modelled)
+
+        assert np.allclose(actual, expected)
+
+    def test_distance_lsq(self):
+        observed = self.data['realrrs']
+        modelled = self.data['rrs']
+        expected = _expected_terms(observed, modelled)[2]
+
+        actual = sb.distance_lsq(observed, modelled)
+
+        assert np.allclose(actual, expected)

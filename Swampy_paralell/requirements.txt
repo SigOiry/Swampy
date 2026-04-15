@@ -1,0 +1,11 @@
+dicttoxml
+numpy
+xmltodict
+netCDF4
+spectral
+future
+pandas
+xlrd
+scipy
+tqdm
+numba

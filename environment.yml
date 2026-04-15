@@ -1,0 +1,23 @@
+name: SwampySim
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - pandas
+  - netcdf4
+  - rasterio
+  - spectral
+  - dicttoxml
+  - xmltodict
+  - future
+  - xlrd
+  - tqdm
+  - numba
+  - tk  # tkinter for the GUI
+  - pip
+  # Optional: if you hit proj/gdal conflicts on Windows, try pinning
+  # - gdal
+  # - proj
