@@ -1,13 +1,14 @@
 {
   "tags": {
-    "Sargassum": "Species",
-    "Fucus vesiculosus": "Species",
-    "Zostera marina": "Species",
+    "Sargassum": "Vegetation",
+    "Fucus vesiculosus": "Vegetation",
+    "Zostera marina": "Vegetation",
     "Sand (Dark)": "Unvegetated",
     "Mud": "Unvegetated",
-    "Posidonia oceanica": "Species",
+    "Posidonia oceanica": "Vegetation",
     "coral": "Unvegetated",
     "Sand (Bright)": "Unvegetated",
-    "Zostera noltei": "Species"
+    "Zostera noltei": "Vegetation",
+    "Mixed Vegetation": "Vegetation"
   }
 }

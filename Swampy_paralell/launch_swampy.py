@@ -312,6 +312,14 @@ def _coerce_float(value, default=0.0):
         return default
 
 
+def _coerce_int(value, default=0):
+    """Translate optional numeric strings into int."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_chunk_rows(value):
     """Return a positive int row count if provided, otherwise None."""
     if value in (None, '', []):
@@ -323,6 +331,63 @@ def _parse_chunk_rows(value):
     except (TypeError, ValueError):
         pass
     return None
+
+
+def _parse_crop_selection(config_root):
+    """Return a validated crop dict from XML/log settings, or None for full-scene processing."""
+    if not config_root or not _coerce_bool(config_root.get('crop_enabled', False), False):
+        return None
+    crop = {
+        'row_start': _coerce_int(config_root.get('crop_row_start'), 0),
+        'row_end': _coerce_int(config_root.get('crop_row_end'), 0),
+        'col_start': _coerce_int(config_root.get('crop_col_start'), 0),
+        'col_end': _coerce_int(config_root.get('crop_col_end'), 0),
+        'source_height': _coerce_int(config_root.get('crop_source_height'), 0),
+        'source_width': _coerce_int(config_root.get('crop_source_width'), 0),
+    }
+    if crop['row_end'] <= crop['row_start'] or crop['col_end'] <= crop['col_start']:
+        return None
+    return crop
+
+
+def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im):
+    """Apply a row/column crop to reflectance and geolocation arrays."""
+    if not crop_selection:
+        return rrs, lat_array, lon_array
+
+    height = int(rrs.shape[1])
+    width = int(rrs.shape[2])
+    source_height = int(crop_selection.get('source_height') or 0)
+    source_width = int(crop_selection.get('source_width') or 0)
+    if source_height and source_width and (height != source_height or width != source_width):
+        raise RuntimeError(
+            f"Saved crop expects a scene of {source_height}x{source_width} pixels, "
+            f"but '{os.path.basename(file_im)}' is {height}x{width}."
+        )
+
+    row_start = max(0, min(height, int(crop_selection['row_start'])))
+    row_end = max(0, min(height, int(crop_selection['row_end'])))
+    col_start = max(0, min(width, int(crop_selection['col_start'])))
+    col_end = max(0, min(width, int(crop_selection['col_end'])))
+    if row_end <= row_start or col_end <= col_start:
+        raise RuntimeError("Crop bounds are empty after clamping to the current scene extent.")
+
+    cropped_rrs = rrs[:, row_start:row_end, col_start:col_end]
+
+    def _crop_spatial_array(arr):
+        if arr is None:
+            return None
+        arr = np.asarray(arr)
+        if arr.ndim == 2:
+            return arr[row_start:row_end, col_start:col_end]
+        if arr.ndim == 1:
+            if arr.shape[0] == height:
+                return arr[row_start:row_end]
+            if arr.shape[0] == width:
+                return arr[col_start:col_end]
+        return arr
+
+    return cropped_rrs, _crop_spatial_array(lat_array), _crop_spatial_array(lon_array)
 
 
 def _suggest_chunk_rows(height, width, target_pixels=_SPLIT_TARGET_PIXELS, min_rows=_SPLIT_MIN_ROWS):
@@ -2651,6 +2716,7 @@ if __name__ == "__main__":
         initial_guess_debug = False
         fully_relaxed = False
         output_modeled_reflectance = False
+        crop_selection = None
         false_deep_correction_settings = dict(DEFAULT_FALSE_DEEP_CORRECTION_SETTINGS)
         if args.path:
             # the xml file has been provided, so let's read the inputs from the xml file
@@ -2672,6 +2738,7 @@ if __name__ == "__main__":
             initial_guess_debug = _coerce_bool(root.get('initial_guess_debug', False))
             fully_relaxed = _coerce_bool(root.get('fully_relaxed', False))
             output_modeled_reflectance = _coerce_bool(root.get('output_modeled_reflectance', False))
+            crop_selection = _parse_crop_selection(root)
             false_deep_correction_settings = _normalise_false_deep_correction_settings({
                 'enabled': root.get('false_deep_correction_enabled', False),
                 'anchor_min_sdi': root.get('false_deep_anchor_min_sdi'),
@@ -2726,6 +2793,7 @@ if __name__ == "__main__":
             bathy_correction_m = _coerce_float(xml_dict.get('bathy_correction_m'), 0.0)
             bathy_tolerance_m = _coerce_float(xml_dict.get('bathy_tolerance_m'), 0.0)
             nedr_mode = str(xml_dict.get('nedr_mode', 'fixed')).strip().lower()
+            crop_selection = _parse_crop_selection(xml_dict)
 
         if fully_relaxed and not relaxed:
             print("[WARN]: Fully relaxed substrate mode requires relaxed constraints. Disabling fully relaxed mode.")
@@ -3017,6 +3085,23 @@ if __name__ == "__main__":
                     name_lon = 'col_index'
             lat_array = lat_grid
             lon_array = lon_grid
+
+            if crop_selection:
+                rrs, lat_array, lon_array = _apply_crop_selection(
+                    rrs,
+                    lat_array,
+                    lon_array,
+                    crop_selection,
+                    file_im,
+                )
+                height = int(rrs.shape[1])
+                width = int(rrs.shape[2])
+                lat_grid = lat_array
+                lon_grid = lon_array
+                print(
+                    f"[INFO]: Applying crop to rows {crop_selection['row_start']}:{crop_selection['row_end']} "
+                    f"and cols {crop_selection['col_start']}:{crop_selection['col_end']}."
+                )
 
             legacy_lat = lat_grid.copy() if rotated_input_mode and lat_grid is not None else None
             legacy_lon = lon_grid.copy() if rotated_input_mode and lon_grid is not None else None
@@ -3550,22 +3635,6 @@ if __name__ == "__main__":
                     substrate_var_names,
                     relaxed,
                     fully_relaxed=fully_relaxed)
-
-            try:
-                if chunk_manifest:
-                    depth_for_slope = _assemble_chunk_variable(chunk_manifest, 'depth', height, width)
-                else:
-                    depth_for_slope = depth if model_outputs is not None else None
-                _write_slope_geotiff(
-                    ofile,
-                    depth_for_slope,
-                    width,
-                    height,
-                    lat_data,
-                    lon_data,
-                    shape_geo_val)
-            except Exception as e:
-                print(f"[ERROR]: Failed to write slope GeoTIFF '{ofile}': {e}")
 
             if correction_debug_layers:
                 try:

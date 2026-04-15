@@ -16,7 +16,7 @@ For each pixel, SWAMpy fits a forward optical model to the observed reflectance 
 - NAP concentration
 - benthic target fractions from the selected spectral library
 
-Depending on the options enabled, the workflow can also export modeled reflectance, spectral post-processing products, slope derived from retrieved bathymetry, and debug layers used to understand difficult areas.
+Depending on the options enabled, the workflow can also export modeled reflectance, spectral post-processing products, and debug layers used to understand difficult areas.
 
 ## 📁 Project Layout
 
@@ -210,7 +210,6 @@ Depending on the selected options, SWAMpy can export:
 - both formats at once
 - modeled reflectance in the selected sensor bands
 - optional post-processing spectral outputs
-- slope derived from the retrieved bathymetry
 
 ### 🧩 Large Scene Handling
 

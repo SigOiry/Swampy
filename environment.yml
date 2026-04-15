@@ -17,6 +17,7 @@ dependencies:
   - tqdm
   - numba
   - tk  # tkinter for the GUI
+  - matplotlib
   - pip
   # Optional: if you hit proj/gdal conflicts on Windows, try pinning
   # - gdal

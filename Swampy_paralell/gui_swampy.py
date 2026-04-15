@@ -7,6 +7,7 @@ Created on Tue Jun 18 15:14:44 2019
 
 import datetime
 import os
+import re
 import sys
 import tkinter as tk
 import xml.etree.ElementTree as ET
@@ -14,6 +15,8 @@ from tkinter import BooleanVar, StringVar, W
 from tkinter import messagebox
 from tkinter import ttk
 from tkinter.filedialog import askdirectory, askopenfilename, askopenfilenames
+
+import numpy as np
 
 try:
     import siop_config
@@ -173,6 +176,115 @@ def _display_input_selection(files):
     if len(files) == 1:
         return files[0]
     return f"{files[0]} (+{len(files) - 1} more)"
+
+
+def _extract_wavelength(var_name):
+    match = re.search(r'(\d+(?:\.\d+)?)', str(var_name))
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _band_sort_key(var_name):
+    value = _extract_wavelength(var_name)
+    if value is not None:
+        return value
+    return str(var_name).lower()
+
+
+def _is_rrs_band_variable(var_name):
+    lowered = str(var_name).lower()
+    return lowered.startswith(('rrs', 'rho', 'reflectance', 'band'))
+
+
+def _is_auxiliary_scene_variable(var_name):
+    lowered = str(var_name).lower()
+    tokens = (
+        'flag',
+        'mask',
+        'quality',
+        'class',
+        'cloud',
+        'glint',
+        'angle',
+        'uncert',
+        'bit',
+    )
+    return any(token in lowered for token in tokens)
+
+
+def _identify_spectral_axis(dim_names, shape):
+    spectral_tokens = ('band', 'wavelength', 'wave', 'lambda', 'wl', 'spec')
+    for idx, name in enumerate(dim_names):
+        lowered = str(name).lower()
+        if any(token in lowered for token in spectral_tokens):
+            return idx
+    return int(np.argmin(shape))
+
+
+def _normalize_rrs_axes(rrs_arr, dim_names):
+    if rrs_arr.ndim != 3:
+        raise ValueError("Expected a 3D RRS array.")
+    if not dim_names or len(dim_names) != 3:
+        dim_names = tuple(f"dim_{i}" for i in range(rrs_arr.ndim))
+    else:
+        dim_names = tuple(dim_names)
+    spectral_axis = _identify_spectral_axis(dim_names, rrs_arr.shape)
+    spatial_axes = [idx for idx in range(rrs_arr.ndim) if idx != spectral_axis]
+    ordered = np.transpose(rrs_arr, axes=[spectral_axis] + spatial_axes)
+    return ordered
+
+
+def _load_preview_band_from_netcdf(path):
+    from netCDF4 import Dataset
+
+    latlon_names = {'lat', 'latitude', 'lon', 'longitude'}
+    with Dataset(path, 'r') as dataset:
+        variables = dataset.variables
+        three_d_candidates = []
+        two_d_candidates = []
+        for var_name, variable in variables.items():
+            lowered = str(var_name).lower()
+            if lowered in latlon_names:
+                continue
+            shape = getattr(variable, 'shape', ())
+            if len(shape) == 3 and all(int(size) > 0 for size in shape):
+                three_d_candidates.append((str(var_name), variable))
+            elif len(shape) == 2 and _is_rrs_band_variable(var_name) and not _is_auxiliary_scene_variable(var_name):
+                two_d_candidates.append((_band_sort_key(var_name), str(var_name), variable))
+
+        if three_d_candidates:
+            for var_name, variable in three_d_candidates:
+                try:
+                    raw_dims = getattr(variable, 'dimensions', ())
+                    spectral_axis = _identify_spectral_axis(raw_dims, variable.shape)
+                    selection = [slice(None)] * 3
+                    selection[spectral_axis] = 0
+                    preview = np.asarray(variable[tuple(selection)], dtype='float32')
+                    if preview.ndim == 2:
+                        return preview, {
+                            "source_name": var_name,
+                            "height": int(preview.shape[0]),
+                            "width": int(preview.shape[1]),
+                        }
+                except Exception:
+                    continue
+
+        if two_d_candidates:
+            two_d_candidates.sort(key=lambda item: (item[0], item[1].lower()))
+            _sort_key, var_name, variable = two_d_candidates[0]
+            preview = np.asarray(variable[:], dtype='float32')
+            if preview.ndim == 2:
+                return preview, {
+                    "source_name": var_name,
+                    "height": int(preview.shape[0]),
+                    "width": int(preview.shape[1]),
+                }
+
+    raise RuntimeError("Unable to find a valid 2D or 3D reflectance layer for preview.")
 
 
 def _infer_output_folder_from_output_file(output_file):
@@ -356,6 +468,8 @@ def gui():
     input_files = []
     input_image_var = StringVar(value="")
     output_folder_var = StringVar(value=os.path.join(cwd, "Output"))
+    crop_selection = None
+    crop_summary_var = StringVar(value="Full scene")
 
     selected_target_names = []
     scalar_values = dict(template_config["scalar_fields"])
@@ -378,9 +492,11 @@ def gui():
         if files:
             input_files = list(files)
             input_image_var.set(_display_input_selection(input_files))
+            clear_crop_selection()
         else:
             input_files = []
             input_image_var.set("")
+            clear_crop_selection()
 
     def select_folder():
         folder = askdirectory(parent=root, title="Choose the output folder")
@@ -518,11 +634,236 @@ def gui():
             return [path for path in input_files if str(path).strip()]
         return [text] if text else []
 
+    def _format_crop_summary(selection):
+        if not selection:
+            return "Full scene"
+        row_start = int(selection["row_start"])
+        row_end = int(selection["row_end"])
+        col_start = int(selection["col_start"])
+        col_end = int(selection["col_end"])
+        return (
+            f"Rows {row_start}:{row_end}, cols {col_start}:{col_end} "
+            f"({row_end - row_start} x {col_end - col_start} px)"
+        )
+
+    def _set_crop_selection(selection):
+        nonlocal crop_selection
+        crop_selection = selection
+        crop_summary_var.set(_format_crop_summary(crop_selection))
+        update_crop_button_state()
+
+    def clear_crop_selection():
+        _set_crop_selection(None)
+
+    crop_button = None
+
+    def update_crop_button_state(*_args):
+        if crop_button is None:
+            return
+        _set_widget_enabled(crop_button, bool(_current_input_file_list()))
+
     def _sync_input_files_with_entry(*_args):
         nonlocal input_files
         if input_files and input_image_var.get() != _display_input_selection(input_files):
             input_files = []
+            clear_crop_selection()
+        current_files = _current_input_file_list()
+        if crop_selection and current_files:
+            crop_source_path = crop_selection.get("source_path")
+            if crop_source_path and not _paths_equivalent(current_files[0], crop_source_path):
+                clear_crop_selection()
+        update_crop_button_state()
         update_run_button_state()
+
+    def open_crop_popup():
+        current_files = _current_input_file_list()
+        if not current_files:
+            messagebox.showinfo("No input image", "Select at least one input image before defining a crop area.", parent=root)
+            return
+
+        first_image = current_files[0]
+        if not os.path.isfile(first_image):
+            messagebox.showerror("Missing input image", f"Input image not found:\n{first_image}", parent=root)
+            return
+
+        try:
+            preview_data, preview_info = _load_preview_band_from_netcdf(first_image)
+        except Exception as exc:
+            messagebox.showerror(
+                "Preview unavailable",
+                f"Unable to open a preview from:\n{first_image}\n\n{exc}",
+                parent=root,
+            )
+            return
+
+        try:
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+            from matplotlib.figure import Figure
+            from matplotlib.patches import Rectangle
+            from matplotlib.widgets import RectangleSelector
+        except Exception as exc:
+            messagebox.showerror(
+                "Missing dependency",
+                f"The crop tool requires matplotlib.\n\n{exc}",
+                parent=root,
+            )
+            return
+
+        popup = tk.Toplevel(root)
+        popup.title("Crop area")
+        popup.geometry("1100x820")
+        popup.minsize(900, 680)
+
+        outer = ttk.Frame(popup, padding=8)
+        outer.pack(fill="both", expand=True)
+
+        ttk.Label(
+            outer,
+            text=(
+                "Previewing the first band of the first selected image. "
+                "Use the toolbar to zoom or pan, then click 'Draw rectangle' and drag on the image. "
+                "Only the selected rectangle will be processed. If no rectangle is kept, the full scene is used."
+            ),
+            wraplength=1020,
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
+
+        figure = Figure(figsize=(8.5, 6.5), dpi=100)
+        axis = figure.add_subplot(111)
+        figure.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.08)
+
+        finite_mask = np.isfinite(preview_data)
+        if np.any(finite_mask):
+            valid_values = preview_data[finite_mask]
+            vmin = float(np.nanpercentile(valid_values, 2))
+            vmax = float(np.nanpercentile(valid_values, 98))
+            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+                vmin = float(np.nanmin(valid_values))
+                vmax = float(np.nanmax(valid_values))
+        else:
+            vmin, vmax = 0.0, 1.0
+
+        image_artist = axis.imshow(
+            preview_data,
+            cmap="viridis",
+            origin="upper",
+            interpolation="nearest",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        axis.set_title(f"{os.path.basename(first_image)} - {preview_info['source_name']}")
+        axis.set_xlabel("Column")
+        axis.set_ylabel("Row")
+        figure.colorbar(image_artist, ax=axis, fraction=0.045, pad=0.02)
+
+        canvas = FigureCanvasTkAgg(figure, master=outer)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(fill="both", expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, outer, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(fill="x", pady=(6, 0))
+
+        controls = ttk.Frame(outer)
+        controls.pack(fill="x", pady=(8, 0))
+        controls.columnconfigure(0, weight=1)
+
+        selection_var = StringVar(value=_format_crop_summary(crop_selection))
+        ttk.Label(controls, textvariable=selection_var).grid(row=0, column=0, sticky="w")
+
+        current_patch = {"artist": None}
+        selection_box = {"value": dict(crop_selection) if crop_selection else None}
+
+        def _draw_rectangle_overlay(selection):
+            if current_patch["artist"] is not None:
+                try:
+                    current_patch["artist"].remove()
+                except Exception:
+                    pass
+                current_patch["artist"] = None
+            if not selection:
+                selection_var.set("Full scene")
+                canvas.draw_idle()
+                return
+            rect = Rectangle(
+                (selection["col_start"], selection["row_start"]),
+                selection["col_end"] - selection["col_start"],
+                selection["row_end"] - selection["row_start"],
+                fill=False,
+                edgecolor="#ff3366",
+                linewidth=2.0,
+            )
+            axis.add_patch(rect)
+            current_patch["artist"] = rect
+            selection_var.set(_format_crop_summary(selection))
+            canvas.draw_idle()
+
+        def _normalise_selection(x1, y1, x2, y2):
+            if any(value is None for value in (x1, y1, x2, y2)):
+                return None
+            col_start = int(np.floor(min(x1, x2)))
+            col_end = int(np.ceil(max(x1, x2)))
+            row_start = int(np.floor(min(y1, y2)))
+            row_end = int(np.ceil(max(y1, y2)))
+            col_start = max(0, min(int(preview_info["width"]), col_start))
+            col_end = max(0, min(int(preview_info["width"]), col_end))
+            row_start = max(0, min(int(preview_info["height"]), row_start))
+            row_end = max(0, min(int(preview_info["height"]), row_end))
+            if col_end <= col_start or row_end <= row_start:
+                return None
+            return {
+                "row_start": row_start,
+                "row_end": row_end,
+                "col_start": col_start,
+                "col_end": col_end,
+                "source_height": int(preview_info["height"]),
+                "source_width": int(preview_info["width"]),
+                "source_path": first_image,
+            }
+
+        def _on_select(eclick, erelease):
+            selection = _normalise_selection(
+                getattr(eclick, "xdata", None),
+                getattr(eclick, "ydata", None),
+                getattr(erelease, "xdata", None),
+                getattr(erelease, "ydata", None),
+            )
+            selection_box["value"] = selection
+            _draw_rectangle_overlay(selection)
+
+        selector = RectangleSelector(
+            axis,
+            _on_select,
+            useblit=True,
+            button=[1],
+            interactive=True,
+            drag_from_anywhere=True,
+            minspanx=2,
+            minspany=2,
+            spancoords="pixels",
+        )
+        selector.set_active(True)
+
+        def _activate_draw():
+            selector.set_active(True)
+
+        def _clear_local_selection():
+            selection_box["value"] = None
+            _draw_rectangle_overlay(None)
+
+        def _accept_crop():
+            _set_crop_selection(selection_box["value"])
+            popup.destroy()
+
+        ttk.Button(controls, text="Draw rectangle", command=_activate_draw).grid(row=0, column=1, sticky="e", padx=(8, 0))
+        ttk.Button(controls, text="Clear", command=_clear_local_selection).grid(row=0, column=2, sticky="e", padx=(8, 0))
+        ttk.Button(controls, text="Cancel", command=popup.destroy).grid(row=0, column=3, sticky="e", padx=(8, 0))
+        ttk.Button(controls, text="OK", command=_accept_crop).grid(row=0, column=4, sticky="e", padx=(8, 0))
+
+        if crop_selection:
+            _draw_rectangle_overlay(crop_selection)
+
+        center_window(popup)
 
     def _get_form_validation_error():
         current_files = _current_input_file_list()
@@ -2077,19 +2418,26 @@ def gui():
 
     ttk.Label(files_frame, text="Input image(s) (.nc)").grid(row=0, column=0, sticky="w")
     ttk.Entry(files_frame, textvariable=input_image_var).grid(row=0, column=1, sticky="ew", padx=(0, 6))
-    ttk.Button(files_frame, text="Browse", command=select_file_im).grid(row=0, column=2, sticky="e")
+    input_buttons = ttk.Frame(files_frame)
+    input_buttons.grid(row=0, column=2, sticky="e")
+    ttk.Button(input_buttons, text="Browse", command=select_file_im).grid(row=0, column=0, sticky="e")
+    crop_button = ttk.Button(input_buttons, text="Crop", command=open_crop_popup)
+    crop_button.grid(row=0, column=1, sticky="e", padx=(6, 0))
 
-    ttk.Label(files_frame, text="Output folder").grid(row=1, column=0, sticky="w")
-    ttk.Entry(files_frame, textvariable=output_folder_var).grid(row=1, column=1, sticky="ew", padx=(0, 6))
-    ttk.Button(files_frame, text="Choose", command=select_folder).grid(row=1, column=2, sticky="e")
+    ttk.Label(files_frame, text="Crop area").grid(row=1, column=0, sticky="nw")
+    ttk.Label(files_frame, textvariable=crop_summary_var, wraplength=560, justify="left").grid(row=1, column=1, sticky="w", padx=(0, 6))
 
-    ttk.Label(files_frame, text="Water & Bottom settings").grid(row=2, column=0, sticky="nw")
-    ttk.Label(files_frame, textvariable=siop_summary_var, wraplength=560, justify="left").grid(row=2, column=1, sticky="w", padx=(0, 6))
-    ttk.Button(files_frame, text="Configure", command=open_siop_popup).grid(row=2, column=2, sticky="e")
+    ttk.Label(files_frame, text="Output folder").grid(row=2, column=0, sticky="w")
+    ttk.Entry(files_frame, textvariable=output_folder_var).grid(row=2, column=1, sticky="ew", padx=(0, 6))
+    ttk.Button(files_frame, text="Choose", command=select_folder).grid(row=2, column=2, sticky="e")
 
-    ttk.Label(files_frame, text="Sensor").grid(row=3, column=0, sticky="nw")
-    ttk.Label(files_frame, textvariable=sensor_summary_var, wraplength=560, justify="left").grid(row=3, column=1, sticky="w", padx=(0, 6))
-    ttk.Button(files_frame, text="Configure", command=open_sensor_popup).grid(row=3, column=2, sticky="e")
+    ttk.Label(files_frame, text="Water & Bottom settings").grid(row=3, column=0, sticky="nw")
+    ttk.Label(files_frame, textvariable=siop_summary_var, wraplength=560, justify="left").grid(row=3, column=1, sticky="w", padx=(0, 6))
+    ttk.Button(files_frame, text="Configure", command=open_siop_popup).grid(row=3, column=2, sticky="e")
+
+    ttk.Label(files_frame, text="Sensor").grid(row=4, column=0, sticky="nw")
+    ttk.Label(files_frame, textvariable=sensor_summary_var, wraplength=560, justify="left").grid(row=4, column=1, sticky="w", padx=(0, 6))
+    ttk.Button(files_frame, text="Configure", command=open_sensor_popup).grid(row=4, column=2, sticky="e")
 
     flags_frame = ttk.Labelframe(input_tab, text="Options")
     flags_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
@@ -2319,6 +2667,7 @@ def gui():
     ):
         tracked_var.trace_add("write", update_run_button_state)
     input_image_var.trace_add("write", _sync_input_files_with_entry)
+    input_image_var.trace_add("write", update_crop_button_state)
     allow_split.trace_add("write", update_run_button_state)
     bathy_mode.trace_add("write", update_run_button_state)
 
@@ -2466,6 +2815,27 @@ def gui():
         if loaded_output_folder:
             output_folder_var.set(loaded_output_folder)
 
+        loaded_crop_enabled = _parse_bool_text(_xml_find_text(xml_root, "crop_enabled"), False)
+        if loaded_crop_enabled:
+            try:
+                loaded_crop = {
+                    "row_start": int(float(_xml_find_text(xml_root, "crop_row_start", "0"))),
+                    "row_end": int(float(_xml_find_text(xml_root, "crop_row_end", "0"))),
+                    "col_start": int(float(_xml_find_text(xml_root, "crop_col_start", "0"))),
+                    "col_end": int(float(_xml_find_text(xml_root, "crop_col_end", "0"))),
+                    "source_height": int(float(_xml_find_text(xml_root, "crop_source_height", "0"))),
+                    "source_width": int(float(_xml_find_text(xml_root, "crop_source_width", "0"))),
+                    "source_path": loaded_images[0] if loaded_images else _xml_find_text(xml_root, "crop_source_image", ""),
+                }
+                if loaded_crop["row_end"] > loaded_crop["row_start"] and loaded_crop["col_end"] > loaded_crop["col_start"]:
+                    _set_crop_selection(loaded_crop)
+                else:
+                    clear_crop_selection()
+            except Exception:
+                clear_crop_selection()
+        else:
+            clear_crop_selection()
+
         above_rrs_flag.set(_parse_bool_text(_xml_find_text(xml_root, "rrs_flag"), above_rrs_flag.get()))
         shallow_flag.set(_parse_bool_text(_xml_find_text(xml_root, "shallow"), shallow_flag.get()))
         optimize_initial_guesses_flag.set(_parse_bool_text(_xml_find_text(xml_root, "optimize_initial_guesses"), optimize_initial_guesses_flag.get()))
@@ -2582,6 +2952,28 @@ def gui():
             messagebox.showerror("Invalid sensor setup", str(exc))
             return
 
+        if crop_selection:
+            try:
+                current_files = _current_input_file_list()
+                for path in current_files:
+                    _preview_band, preview_info = _load_preview_band_from_netcdf(path)
+                    if (
+                        int(preview_info["height"]) != int(crop_selection["source_height"])
+                        or int(preview_info["width"]) != int(crop_selection["source_width"])
+                    ):
+                        raise ValueError(
+                            f"The selected crop was created for an image of size "
+                            f"{crop_selection['source_height']} x {crop_selection['source_width']} px, "
+                            f"but '{os.path.basename(path)}' is "
+                            f"{preview_info['height']} x {preview_info['width']} px."
+                        )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Invalid crop selection",
+                    f"The current crop area cannot be applied to the selected image set.\n\n{exc}",
+                )
+                return
+
         root.destroy()
 
     actions = ttk.Frame(container)
@@ -2596,6 +2988,7 @@ def gui():
 
     update_substrate_ui()
     update_sensor_ui()
+    update_crop_button_state()
     update_run_button_state()
     root.protocol("WM_DELETE_WINDOW", on_close)
     center_window(root)
@@ -2653,6 +3046,14 @@ def gui():
     input_dict = {
         "image": file_list[0] if file_list else "",
         "images": list(file_list),
+        "crop_enabled": bool(crop_selection),
+        "crop_row_start": int(crop_selection["row_start"]) if crop_selection else 0,
+        "crop_row_end": int(crop_selection["row_end"]) if crop_selection else 0,
+        "crop_col_start": int(crop_selection["col_start"]) if crop_selection else 0,
+        "crop_col_end": int(crop_selection["col_end"]) if crop_selection else 0,
+        "crop_source_height": int(crop_selection["source_height"]) if crop_selection else 0,
+        "crop_source_width": int(crop_selection["source_width"]) if crop_selection else 0,
+        "crop_source_image": str(crop_selection.get("source_path", "")) if crop_selection else "",
         "SIOPS": file_iop,
         "sensor_filter": file_sensor,
         "nedr_mode": "fixed",
