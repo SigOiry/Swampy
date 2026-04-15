@@ -166,7 +166,7 @@ The bundled EMOD bathymetry product is too large to be hosted directly in the Gi
 
 If you are using a GitHub copy of this project, download the EMOD bathymetry from:
 
-`[link]`
+`[HERE](https://nextcloud.oirysimon.com/s/pdCZcqfNWYoKLK5)`
 
 Then place the downloaded file here:
 
