@@ -21,13 +21,13 @@ author:
       - Revision
     affiliations:
       - Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 34149 Trieste, Italy
-  - name: Giuliana Profeti
-    corresponding: false
-    roles: 
-      - Data acquisition
-      - Revision
-    affiliations:
-      - Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 30122 Venezia, Italy
+  # - name: Giuliana Profeti
+  #   corresponding: false
+  #   roles: 
+  #     - Data acquisition
+  #     - Revision
+  #   affiliations:
+  #     - Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 30122 Venezia, Italy
   - name: Vittorio Brando
     orcid: 0000-0002-2193-5695
     corresponding: false
