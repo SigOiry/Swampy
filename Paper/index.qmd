@@ -54,3 +54,4 @@ editor_options:
 csl: RSE.csl
 ---
 
+I changed the name of the workflow because SWAMPy already taken... Its QGIS plugin that allow the user to build groundwater models. See [Here](https://github.com/dzamrsky/SWAMPy-tools) 
