@@ -117,6 +117,14 @@ def _dedupe_float_sequence(values, atol=1e-12):
 
 
 def _initial_guess_values_from_bounds(lower, upper, use_five_points=False):
+    """Return the initial-guess values to test inside the user bounds.
+
+    Default mode tests exactly 3 values:
+    25%, 50%, and 75% of the interval.
+
+    Five-point mode tests exactly 5 values:
+    min, 25%, 50%, 75%, and max.
+    """
     lower = float(lower)
     upper = float(upper)
     midpoint = (lower + upper) / 2.0

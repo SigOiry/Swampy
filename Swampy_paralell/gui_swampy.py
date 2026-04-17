@@ -6,9 +6,13 @@ Created on Tue Jun 18 15:14:44 2019
 """
 
 import datetime
+import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
+import threading
 import tkinter as tk
 import xml.etree.ElementTree as ET
 from tkinter import BooleanVar, StringVar, W
@@ -35,6 +39,8 @@ PLOT_COLORS = [
     "#cc5500",
     "#6c757d",
 ]
+
+_SENTINEL_RGB_PREVIEW_MAX_PIXELS = 6_000_000
 
 
 def _xml_find_text(node, path, default=None):
@@ -178,6 +184,11 @@ def _display_input_selection(files):
     return f"{files[0]} (+{len(files) - 1} more)"
 
 
+def _looks_like_wavelength_var(var_name):
+    lowered = str(var_name).lower()
+    return any(token in lowered for token in ('wave', 'wl', 'lambda', 'wavelength'))
+
+
 def _extract_wavelength(var_name):
     match = re.search(r'(\d+(?:\.\d+)?)', str(var_name))
     if match:
@@ -216,6 +227,265 @@ def _is_auxiliary_scene_variable(var_name):
     return any(token in lowered for token in tokens)
 
 
+def _format_band_wavelength(wavelength):
+    if wavelength is None:
+        return ""
+    try:
+        value = float(wavelength)
+    except (TypeError, ValueError):
+        return ""
+    if not np.isfinite(value):
+        return ""
+    if float(value).is_integer():
+        return f"{int(round(value))} nm"
+    return f"{value:.1f} nm"
+
+
+def _build_image_band_label(index, wavelength=None, var_name=None, source_kind="3d"):
+    wavelength_text = _format_band_wavelength(wavelength)
+    if source_kind == "stacked_2d" and var_name:
+        return f"{var_name} ({wavelength_text})" if wavelength_text else str(var_name)
+    label = f"Band {int(index) + 1}"
+    if wavelength_text:
+        label += f" ({wavelength_text})"
+    return label
+
+
+def _find_matching_wavelength_vector(variables, variable_name, variable, spectral_axis):
+    band_count = int(variable.shape[spectral_axis])
+    raw_dims = getattr(variable, "dimensions", ()) or ()
+    spectral_dim = raw_dims[spectral_axis] if spectral_axis < len(raw_dims) else None
+
+    candidate_names = []
+    if spectral_dim and spectral_dim in variables:
+        candidate_names.append(spectral_dim)
+    for cand_name, cand_var in variables.items():
+        if cand_name == variable_name:
+            continue
+        if getattr(cand_var, "ndim", 0) != 1:
+            continue
+        try:
+            cand_length = int(cand_var.shape[0])
+        except Exception:
+            continue
+        if cand_length != band_count:
+            continue
+        std_name = getattr(cand_var, "standard_name", "").lower() if hasattr(cand_var, "standard_name") else ""
+        axis_name = getattr(cand_var, "axis", "").lower() if hasattr(cand_var, "axis") else ""
+        if (
+            cand_name == spectral_dim
+            or _looks_like_wavelength_var(cand_name)
+            or "wavelength" in std_name
+            or axis_name == "z"
+        ):
+            candidate_names.append(cand_name)
+
+    seen = set()
+    for cand_name in candidate_names:
+        if cand_name in seen:
+            continue
+        seen.add(cand_name)
+        try:
+            values = np.asarray(variables[cand_name][:], dtype="float32").reshape(-1)
+        except Exception:
+            continue
+        if values.size != band_count or not np.all(np.isfinite(values)):
+            continue
+        return [float(value) for value in values], cand_name
+    return [None] * band_count, None
+
+
+def _load_input_image_band_info(path):
+    from netCDF4 import Dataset
+
+    latlon_names = {'lat', 'latitude', 'lon', 'longitude'}
+    with Dataset(path, 'r') as dataset:
+        variables = dataset.variables
+        three_d_candidates = []
+        two_d_candidates = []
+        wavelength_vector = None
+        wavelength_name = None
+
+        for var_name, variable in variables.items():
+            lowered = str(var_name).lower()
+            if lowered in latlon_names:
+                continue
+            shape = getattr(variable, 'shape', ())
+            if len(shape) == 1 and _looks_like_wavelength_var(var_name):
+                try:
+                    wavelength_vector = np.asarray(variable[:], dtype='float32').reshape(-1)
+                    wavelength_name = str(var_name)
+                except Exception:
+                    pass
+                continue
+            if len(shape) == 3 and all(int(size) > 0 for size in shape):
+                three_d_candidates.append((str(var_name), variable))
+            elif len(shape) == 2 and _is_rrs_band_variable(var_name) and not _is_auxiliary_scene_variable(var_name):
+                wave = _extract_wavelength(var_name)
+                two_d_candidates.append((_band_sort_key(var_name), str(var_name), variable, wave))
+
+        if three_d_candidates:
+            last_valid_result = None
+            for var_name, variable in three_d_candidates:
+                try:
+                    spectral_axis = _identify_spectral_axis(getattr(variable, 'dimensions', ()), variable.shape)
+                    band_count = int(variable.shape[spectral_axis])
+                except Exception:
+                    continue
+                wavelengths, wavelength_var_name = _find_matching_wavelength_vector(
+                    variables,
+                    var_name,
+                    variable,
+                    spectral_axis,
+                )
+                if all(value is None for value in wavelengths) and wavelength_vector is not None and len(wavelength_vector) == band_count:
+                    wavelengths = [float(value) for value in wavelength_vector]
+                    wavelength_var_name = wavelength_name
+                bands = []
+                for band_index in range(band_count):
+                    wavelength = wavelengths[band_index] if band_index < len(wavelengths) else None
+                    bands.append({
+                        "index": band_index,
+                        "label": _build_image_band_label(band_index, wavelength=wavelength, source_kind="3d"),
+                        "wavelength": wavelength,
+                        "source_name": var_name,
+                    })
+                last_valid_result = {
+                    "path": path,
+                    "source_name": var_name,
+                    "source_kind": "3d",
+                    "wavelength_var_name": wavelength_var_name,
+                    "bands": bands,
+                    "labels": [band["label"] for band in bands],
+                    "wavelengths": [band["wavelength"] for band in bands],
+                    "band_count": len(bands),
+                    "is_hyperspectral": len(bands) > 20,
+                }
+            if last_valid_result is not None:
+                return last_valid_result
+
+        if two_d_candidates:
+            two_d_candidates.sort(key=lambda item: (item[0], item[1].lower()))
+            bands = []
+            for band_index, (_sort_key, var_name, _variable, wavelength) in enumerate(two_d_candidates):
+                bands.append({
+                    "index": band_index,
+                    "label": _build_image_band_label(
+                        band_index,
+                        wavelength=wavelength,
+                        var_name=var_name,
+                        source_kind="stacked_2d",
+                    ),
+                    "wavelength": wavelength,
+                    "source_name": var_name,
+                })
+            return {
+                "path": path,
+                "source_name": "stacked_rrs",
+                "source_kind": "stacked_2d",
+                "wavelength_var_name": wavelength_name,
+                "bands": bands,
+                "labels": [band["label"] for band in bands],
+                "wavelengths": [band["wavelength"] for band in bands],
+                "band_count": len(bands),
+                "is_hyperspectral": len(bands) > 20,
+            }
+
+    raise RuntimeError("Unable to find valid reflectance bands in the selected input image.")
+
+
+def _image_band_info_matches_mapping(image_band_info, mapping):
+    if not image_band_info or not mapping:
+        return False
+    source_labels = list(mapping.get("source_band_labels") or [])
+    source_wavelengths = list(mapping.get("source_band_wavelengths") or [])
+    if source_labels and list(image_band_info.get("labels") or []) == source_labels:
+        return True
+    current_wavelengths = np.asarray(image_band_info.get("wavelengths") or [], dtype=object)
+    stored_wavelengths = np.asarray(source_wavelengths or [], dtype=object)
+    if current_wavelengths.size and stored_wavelengths.size and current_wavelengths.size == stored_wavelengths.size:
+        current_numeric = np.array([
+            np.nan if value is None else float(value) for value in current_wavelengths
+        ], dtype=float)
+        stored_numeric = np.array([
+            np.nan if value in (None, "") else float(value) for value in stored_wavelengths
+        ], dtype=float)
+        valid_mask = np.isfinite(current_numeric) & np.isfinite(stored_numeric)
+        if np.any(valid_mask) and np.array_equal(np.isnan(current_numeric), np.isnan(stored_numeric)):
+            return np.allclose(current_numeric[valid_mask], stored_numeric[valid_mask], atol=0.5)
+    return False
+
+
+def _mapping_lookup_from_payload(mapping):
+    sensor_band_indices = list(mapping.get("sensor_band_indices") or [])
+    image_band_indices = list(mapping.get("image_band_indices") or [])
+    lookup = {}
+    for sensor_index, image_index in zip(sensor_band_indices, image_band_indices):
+        try:
+            lookup[int(sensor_index)] = int(image_index)
+        except (TypeError, ValueError):
+            continue
+    return lookup
+
+
+def _clone_sensor_band_mapping_config(mapping):
+    if not mapping:
+        return None
+    cloned = dict(mapping)
+    for key in (
+        "source_band_labels",
+        "source_band_wavelengths",
+        "sensor_band_indices",
+        "sensor_band_centers",
+        "image_band_indices",
+        "image_band_labels",
+        "image_band_wavelengths",
+    ):
+        cloned[key] = list(mapping.get(key) or [])
+    return cloned
+
+
+def _auto_match_sensor_band_lookup(template, selected_sensor_indices, image_band_info, tolerance_nm=10.0):
+    if not image_band_info:
+        return {}, []
+    tolerance_nm = max(0.0, float(tolerance_nm))
+    source_bands = list(image_band_info.get("bands") or [])
+    source_wavelengths = [band.get("wavelength") for band in source_bands]
+    lookup = {}
+    unmatched = []
+    used_source_indices = set()
+
+    has_source_wavelengths = any(value is not None for value in source_wavelengths)
+    if has_source_wavelengths:
+        numeric_wavelengths = np.array([
+            np.nan if value is None else float(value) for value in source_wavelengths
+        ], dtype=float)
+        for sensor_index in selected_sensor_indices:
+            sensor_band = next((band for band in template["bands"] if int(band["index"]) == int(sensor_index)), None)
+            if sensor_band is None:
+                unmatched.append(int(sensor_index))
+                continue
+            target_center = float(sensor_band["center"])
+            candidate_order = np.argsort(np.abs(numeric_wavelengths - target_center))
+            chosen_source_index = None
+            for candidate in candidate_order:
+                if int(candidate) in used_source_indices:
+                    continue
+                delta = abs(float(numeric_wavelengths[int(candidate)]) - target_center)
+                if not np.isfinite(delta) or delta > tolerance_nm:
+                    continue
+                chosen_source_index = int(candidate)
+                break
+            if chosen_source_index is None:
+                unmatched.append(int(sensor_index))
+                continue
+            lookup[int(sensor_index)] = chosen_source_index
+            used_source_indices.add(chosen_source_index)
+        return lookup, unmatched
+
+    return {}, [int(sensor_index) for sensor_index in selected_sensor_indices]
+
+
 def _identify_spectral_axis(dim_names, shape):
     spectral_tokens = ('band', 'wavelength', 'wave', 'lambda', 'wl', 'spec')
     for idx, name in enumerate(dim_names):
@@ -238,10 +508,155 @@ def _normalize_rrs_axes(rrs_arr, dim_names):
     return ordered
 
 
-def _load_preview_band_from_netcdf(path):
+def _load_coordinate_variable(nc_vars, primary_names, std_names=('latitude',)):
+    for cand in primary_names:
+        if cand in nc_vars:
+            try:
+                data = np.asarray(nc_vars[cand][:])
+                return cand, data
+            except Exception:
+                continue
+    for var_name, var in nc_vars.items():
+        std_name = getattr(var, 'standard_name', '').lower() if hasattr(var, 'standard_name') else ''
+        if std_name in std_names:
+            try:
+                data = np.asarray(var[:])
+                return var_name, data
+            except Exception:
+                continue
+    return None, None
+
+
+def _prepare_preview_coordinate_grids(variables, height, width):
+    lat_name, lat_array = _load_coordinate_variable(
+        variables,
+        ('lat', 'latitude', 'Lat', 'Latitude', 'LAT', 'LATITUDE'),
+        ('latitude',),
+    )
+    lon_name, lon_array = _load_coordinate_variable(
+        variables,
+        ('lon', 'longitude', 'Lon', 'Longitude', 'LON', 'LONGITUDE'),
+        ('longitude',),
+    )
+    if lat_array is None or lon_array is None:
+        return None, None, lat_name, lon_name
+
+    lat_array = np.asarray(lat_array, dtype='float32')
+    lon_array = np.asarray(lon_array, dtype='float32')
+
+    if lat_array.ndim == 1 and lon_array.ndim == 1:
+        lon_grid, lat_grid = np.meshgrid(lon_array, lat_array)
+        return lat_grid.astype('float32', copy=False), lon_grid.astype('float32', copy=False), lat_name, lon_name
+
+    if lat_array.ndim == 2 and lon_array.ndim == 2:
+        expected_shape = (height, width)
+        if lat_array.shape != expected_shape or lon_array.shape != expected_shape:
+            if lat_array.shape[::-1] == expected_shape and lon_array.shape[::-1] == expected_shape:
+                lat_array = np.transpose(lat_array)
+                lon_array = np.transpose(lon_array)
+        if lat_array.shape == expected_shape and lon_array.shape == expected_shape:
+            return lat_array, lon_array, lat_name, lon_name
+
+    return None, None, lat_name, lon_name
+
+
+def _load_vector_mask_geometries(path):
+    import fiona
+    from rasterio.warp import transform_geom
+
+    geometries = []
+    with fiona.open(path, 'r') as src:
+        src_crs = src.crs_wkt or src.crs
+        if not src_crs:
+            raise RuntimeError("The shapefile has no CRS information.")
+        for feature in src:
+            geometry = feature.get('geometry')
+            if not geometry:
+                continue
+            transformed = transform_geom(src_crs, "EPSG:4326", geometry, precision=8)
+            geometries.append(transformed)
+    if not geometries:
+        raise RuntimeError("The shapefile does not contain any valid polygon geometry.")
+    return geometries
+
+
+def _iter_geometry_line_parts(geometry):
+    geom_type = str(geometry.get("type", ""))
+    coords = geometry.get("coordinates")
+    if not coords:
+        return
+    if geom_type == "Polygon":
+        for ring in coords:
+            yield ring
+    elif geom_type == "MultiPolygon":
+        for polygon in coords:
+            for ring in polygon:
+                yield ring
+    elif geom_type == "LineString":
+        yield coords
+    elif geom_type == "MultiLineString":
+        for line in coords:
+            yield line
+    elif geom_type == "GeometryCollection":
+        for sub_geom in geometry.get("geometries", []):
+            yield from _iter_geometry_line_parts(sub_geom)
+
+
+def _load_preview_band_from_netcdf(path, sensor_name=None):
     from netCDF4 import Dataset
 
     latlon_names = {'lat', 'latitude', 'lon', 'longitude'}
+    sensor_name_text = str(sensor_name).strip().lower()
+    is_sentinel2 = sensor_name_text == "sentinel-2"
+    preferred_band_index = 1 if is_sentinel2 else 0
+
+    def _select_sentinel_rgb_indices(wavelengths, band_count):
+        if band_count < 3:
+            return None
+        finite_waves = []
+        for index, value in enumerate(wavelengths):
+            try:
+                wave = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(wave):
+                finite_waves.append((index, wave))
+        targets = (665.0, 560.0, 490.0)
+        if finite_waves:
+            used = set()
+            chosen = []
+            for target in targets:
+                ranked = sorted(
+                    ((abs(wave - target), index) for index, wave in finite_waves if index not in used),
+                    key=lambda item: item[0],
+                )
+                if not ranked:
+                    return None
+                delta, best_index = ranked[0]
+                if delta > 60.0:
+                    return None
+                used.add(best_index)
+                chosen.append(int(best_index))
+            return tuple(chosen)
+        if band_count >= 4:
+            return (3, 2, 1)
+        return None
+
+    def _build_preview_info(preview, source_name, lat_grid, lon_grid, lat_name, lon_name,
+                            preview_band_index=None, preview_mode="grayscale", preview_description=None):
+        return {
+            "source_name": source_name,
+            "height": int(preview.shape[0]),
+            "width": int(preview.shape[1]),
+            "lat_grid": lat_grid,
+            "lon_grid": lon_grid,
+            "lat_name": lat_name,
+            "lon_name": lon_name,
+            "preview_band_index": preview_band_index,
+            "preview_mode": preview_mode,
+            "preview_description": preview_description or source_name,
+        }
+
     with Dataset(path, 'r') as dataset:
         variables = dataset.variables
         three_d_candidates = []
@@ -254,37 +669,262 @@ def _load_preview_band_from_netcdf(path):
             if len(shape) == 3 and all(int(size) > 0 for size in shape):
                 three_d_candidates.append((str(var_name), variable))
             elif len(shape) == 2 and _is_rrs_band_variable(var_name) and not _is_auxiliary_scene_variable(var_name):
-                two_d_candidates.append((_band_sort_key(var_name), str(var_name), variable))
+                wave = _extract_wavelength(var_name)
+                two_d_candidates.append((_band_sort_key(var_name), str(var_name), variable, wave))
 
         if three_d_candidates:
             for var_name, variable in three_d_candidates:
                 try:
                     raw_dims = getattr(variable, 'dimensions', ())
                     spectral_axis = _identify_spectral_axis(raw_dims, variable.shape)
+                    spatial_shape = [int(size) for axis_index, size in enumerate(variable.shape) if axis_index != spectral_axis]
+                    preview_pixels = int(spatial_shape[0]) * int(spatial_shape[1]) if len(spatial_shape) == 2 else 0
                     selection = [slice(None)] * 3
-                    selection[spectral_axis] = 0
+                    band_count = int(variable.shape[spectral_axis])
+                    wavelengths, wavelength_var_name = _find_matching_wavelength_vector(
+                        variables,
+                        var_name,
+                        variable,
+                        spectral_axis,
+                    )
+                    if (
+                        is_sentinel2
+                        and preview_pixels > 0
+                        and preview_pixels <= _SENTINEL_RGB_PREVIEW_MAX_PIXELS
+                    ):
+                        rgb_indices = _select_sentinel_rgb_indices(wavelengths, band_count)
+                        if rgb_indices is not None:
+                            rgb_layers = []
+                            for band_index in rgb_indices:
+                                rgb_selection = [slice(None)] * 3
+                                rgb_selection[spectral_axis] = int(band_index)
+                                layer = np.asarray(variable[tuple(rgb_selection)], dtype='float32')
+                                if layer.ndim != 2:
+                                    rgb_layers = []
+                                    break
+                                rgb_layers.append(layer)
+                            if len(rgb_layers) == 3:
+                                preview = np.stack(rgb_layers, axis=-1)
+                                lat_grid, lon_grid, lat_name, lon_name = _prepare_preview_coordinate_grids(
+                                    variables,
+                                    int(preview.shape[0]),
+                                    int(preview.shape[1]),
+                                )
+                                return preview, _build_preview_info(
+                                    preview,
+                                    var_name,
+                                    lat_grid,
+                                    lon_grid,
+                                    lat_name,
+                                    lon_name,
+                                    preview_band_index=int(rgb_indices[0]),
+                                    preview_mode="rgb",
+                                    preview_description="Sentinel-2 RGB composite (bands 4-3-2)",
+                                )
+                    selection[spectral_axis] = min(max(preferred_band_index, 0), max(0, band_count - 1))
                     preview = np.asarray(variable[tuple(selection)], dtype='float32')
                     if preview.ndim == 2:
-                        return preview, {
-                            "source_name": var_name,
-                            "height": int(preview.shape[0]),
-                            "width": int(preview.shape[1]),
-                        }
+                        lat_grid, lon_grid, lat_name, lon_name = _prepare_preview_coordinate_grids(
+                            variables,
+                            int(preview.shape[0]),
+                            int(preview.shape[1]),
+                        )
+                        preview_description = (
+                            "Sentinel-2 grayscale preview (band 2)"
+                            if is_sentinel2
+                            else f"Grayscale preview ({var_name})"
+                        )
+                        return preview, _build_preview_info(
+                            preview,
+                            var_name,
+                            lat_grid,
+                            lon_grid,
+                            lat_name,
+                            lon_name,
+                            preview_band_index=min(max(preferred_band_index, 0), max(0, band_count - 1)),
+                            preview_mode="grayscale",
+                            preview_description=preview_description,
+                        )
                 except Exception:
                     continue
 
         if two_d_candidates:
             two_d_candidates.sort(key=lambda item: (item[0], item[1].lower()))
-            _sort_key, var_name, variable = two_d_candidates[0]
+            if is_sentinel2:
+                preview_height = int(two_d_candidates[0][2].shape[0])
+                preview_width = int(two_d_candidates[0][2].shape[1])
+                preview_pixels = preview_height * preview_width
+                if preview_pixels <= _SENTINEL_RGB_PREVIEW_MAX_PIXELS:
+                    rgb_indices = _select_sentinel_rgb_indices(
+                        [item[3] for item in two_d_candidates],
+                        len(two_d_candidates),
+                    )
+                    if rgb_indices is not None:
+                        rgb_layers = []
+                        rgb_names = []
+                        for band_index in rgb_indices:
+                            _, var_name, variable, _wave = two_d_candidates[int(band_index)]
+                            layer = np.asarray(variable[:], dtype='float32')
+                            if layer.ndim != 2:
+                                rgb_layers = []
+                                break
+                            rgb_layers.append(layer)
+                            rgb_names.append(var_name)
+                        if len(rgb_layers) == 3:
+                            preview = np.stack(rgb_layers, axis=-1)
+                            lat_grid, lon_grid, lat_name, lon_name = _prepare_preview_coordinate_grids(
+                                variables,
+                                int(preview.shape[0]),
+                                int(preview.shape[1]),
+                            )
+                            return preview, _build_preview_info(
+                                preview,
+                                ", ".join(rgb_names),
+                                lat_grid,
+                                lon_grid,
+                                lat_name,
+                                lon_name,
+                                preview_band_index=int(rgb_indices[0]),
+                                preview_mode="rgb",
+                                preview_description="Sentinel-2 RGB composite (bands 4-3-2)",
+                            )
+            candidate_index = min(max(preferred_band_index, 0), max(0, len(two_d_candidates) - 1))
+            _sort_key, var_name, variable, _wave = two_d_candidates[candidate_index]
             preview = np.asarray(variable[:], dtype='float32')
             if preview.ndim == 2:
-                return preview, {
-                    "source_name": var_name,
-                    "height": int(preview.shape[0]),
-                    "width": int(preview.shape[1]),
-                }
+                lat_grid, lon_grid, lat_name, lon_name = _prepare_preview_coordinate_grids(
+                    variables,
+                    int(preview.shape[0]),
+                    int(preview.shape[1]),
+                )
+                preview_description = (
+                    "Sentinel-2 grayscale preview (band 2)"
+                    if is_sentinel2
+                    else f"Grayscale preview ({var_name})"
+                )
+                return preview, _build_preview_info(
+                    preview,
+                    var_name,
+                    lat_grid,
+                    lon_grid,
+                    lat_name,
+                    lon_name,
+                    preview_band_index=candidate_index,
+                    preview_mode="grayscale",
+                    preview_description=preview_description,
+                )
 
     raise RuntimeError("Unable to find a valid 2D or 3D reflectance layer for preview.")
+
+
+def _preview_image_from_array(preview_data, max_dim=1400):
+    from PIL import Image
+
+    preview = np.asarray(preview_data, dtype='float32')
+    if preview.ndim == 3 and preview.shape[-1] >= 3:
+        preview = preview[..., :3]
+        scaled = np.zeros(preview.shape, dtype='uint8')
+        for channel_index in range(3):
+            channel = np.asarray(preview[..., channel_index], dtype='float32')
+            finite_mask = np.isfinite(channel)
+            if np.any(finite_mask):
+                valid = channel[finite_mask]
+                vmin = float(np.nanpercentile(valid, 2))
+                vmax = float(np.nanpercentile(valid, 98))
+                if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+                    vmin = float(np.nanmin(valid))
+                    vmax = float(np.nanmax(valid))
+            else:
+                vmin, vmax = 0.0, 1.0
+            if vmax > vmin:
+                clipped = np.clip(channel, vmin, vmax)
+                scaled[..., channel_index] = np.round(((clipped - vmin) / (vmax - vmin)) * 255.0).astype('uint8')
+        image = Image.fromarray(scaled, mode='RGB')
+    else:
+        finite_mask = np.isfinite(preview)
+        if np.any(finite_mask):
+            valid = preview[finite_mask]
+            vmin = float(np.nanpercentile(valid, 2))
+            vmax = float(np.nanpercentile(valid, 98))
+            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+                vmin = float(np.nanmin(valid))
+                vmax = float(np.nanmax(valid))
+        else:
+            vmin, vmax = 0.0, 1.0
+        scaled = np.zeros(preview.shape, dtype='uint8')
+        if vmax > vmin:
+            clipped = np.clip(preview, vmin, vmax)
+            scaled = np.round(((clipped - vmin) / (vmax - vmin)) * 255.0).astype('uint8')
+        image = Image.fromarray(scaled, mode='L')
+    width, height = image.size
+    largest_dim = max(width, height)
+    if largest_dim > max_dim and largest_dim > 0:
+        scale = float(max_dim) / float(largest_dim)
+        resized_size = (
+            max(1, int(round(width * scale))),
+            max(1, int(round(height * scale))),
+        )
+        resampling = getattr(Image, "Resampling", Image)
+        image = image.resize(resized_size, resampling.BILINEAR)
+    return image
+
+
+def _write_preview_image_asset(preview_data, output_dir, base_name="leaflet_crop_preview", max_dim=1400):
+    image = _preview_image_from_array(preview_data, max_dim=max_dim)
+    output_dir = os.path.abspath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    webp_path = os.path.join(output_dir, f"{base_name}.webp")
+    png_path = os.path.join(output_dir, f"{base_name}.png")
+    try:
+        image.save(webp_path, format='WEBP', quality=78, method=6)
+        return webp_path
+    except Exception:
+        image.save(png_path, format='PNG', optimize=True)
+        return png_path
+
+
+def _open_leaflet_crop_window(repo_root, request_payload):
+    helper_script = os.path.join(repo_root, "Swampy_paralell", "leaflet_crop_window.py")
+    if not os.path.isfile(helper_script):
+        raise RuntimeError(f"Missing Leaflet crop helper script:\n{helper_script}")
+
+    with tempfile.TemporaryDirectory(prefix="swampy_leaflet_crop_") as temp_dir:
+        request_payload = dict(request_payload)
+        preview_data = request_payload.pop("preview_data", None)
+        if preview_data is not None:
+            request_payload["image_url"] = _write_preview_image_asset(preview_data, temp_dir)
+        request_path = os.path.join(temp_dir, "request.json")
+        response_path = os.path.join(temp_dir, "response.json")
+        helper_log_path = os.path.join(temp_dir, "leaflet_crop_helper.log")
+        with open(request_path, "w", encoding="utf-8") as request_file:
+            json.dump(request_payload, request_file)
+        with open(helper_log_path, "w", encoding="utf-8") as helper_log:
+            result = subprocess.run(
+                [sys.executable, helper_script, request_path, response_path],
+                cwd=repo_root,
+                stdout=helper_log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+        if result.returncode != 0:
+            details = ""
+            if os.path.isfile(helper_log_path):
+                try:
+                    with open(helper_log_path, "r", encoding="utf-8", errors="replace") as helper_log:
+                        details = helper_log.read().strip()
+                except Exception:
+                    details = ""
+            if details:
+                raise RuntimeError(details)
+            raise RuntimeError("Leaflet crop window exited with an error.")
+        if not os.path.isfile(response_path):
+            return None
+        with open(response_path, "r", encoding="utf-8") as response_file:
+            response = json.load(response_file)
+    if response.get("cancelled", False):
+        return None
+    return response.get("selection")
 
 
 def _infer_output_folder_from_output_file(output_file):
@@ -388,8 +1028,6 @@ def _draw_spectra_preview(canvas, spectral_library, selected_names, hovered_name
 def gui():
     root = tk.Tk()
     root.title("SWAMpy | Input Configuration")
-    root.geometry("1080x760")
-    root.minsize(920, 680)
 
     try:
         style = ttk.Style()
@@ -414,15 +1052,69 @@ def gui():
         cancelled = True
         root.destroy()
 
-    def center_window(window):
+    def _parse_geometry_size(geometry):
+        if not geometry:
+            return None
+        match = re.match(r"^\s*(\d+)x(\d+)", str(geometry))
+        if not match:
+            return None
+        return int(match.group(1)), int(match.group(2))
+
+    def apply_window_size(window, preferred_size=None, minsize=(700, 240),
+                          width_ratio=None, height_ratio=None,
+                          max_width_ratio=0.96, max_height_ratio=0.92):
+        screen_width = window.winfo_screenwidth()
+        screen_height = window.winfo_screenheight()
+        preferred_width = preferred_size[0] if preferred_size else None
+        preferred_height = preferred_size[1] if preferred_size else None
+
+        if width_ratio is not None:
+            ratio_width = int(screen_width * float(width_ratio))
+            preferred_width = max(preferred_width or 0, ratio_width)
+        if height_ratio is not None:
+            ratio_height = int(screen_height * float(height_ratio))
+            preferred_height = max(preferred_height or 0, ratio_height)
+
+        target_width = preferred_width if preferred_width is not None else window.winfo_reqwidth()
+        target_height = preferred_height if preferred_height is not None else window.winfo_reqheight()
+
+        max_width = max(640, int(screen_width * max_width_ratio))
+        max_height = max(420, int(screen_height * max_height_ratio))
+        target_width = max(minsize[0], target_width)
+        target_height = max(minsize[1], target_height)
+        target_width = min(target_width, max_width)
+        target_height = min(target_height, max_height)
+
+        effective_min_width = min(int(minsize[0]), target_width)
+        effective_min_height = min(int(minsize[1]), target_height)
+        window.geometry(f"{int(target_width)}x{int(target_height)}")
+        window.minsize(effective_min_width, effective_min_height)
+
+    def center_window(window, max_width_ratio=0.96, max_height_ratio=0.92):
+        window.update_idletasks()
+        screen_width = window.winfo_screenwidth()
+        screen_height = window.winfo_screenheight()
+        max_width = max(640, int(screen_width * max_width_ratio))
+        max_height = max(420, int(screen_height * max_height_ratio))
+        width = min(window.winfo_width(), max_width)
+        height = min(window.winfo_height(), max_height)
+        window.geometry(f"{width}x{height}")
         window.update_idletasks()
         width = window.winfo_width()
         height = window.winfo_height()
-        screen_width = window.winfo_screenwidth()
-        screen_height = window.winfo_screenheight()
         x_pos = int((screen_width - width) / 2)
         y_pos = int((screen_height - height) / 3)
         window.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
+
+    apply_window_size(
+        root,
+        preferred_size=(1180, 820),
+        minsize=(960, 700),
+        width_ratio=0.9,
+        height_ratio=0.88,
+        max_width_ratio=0.94,
+        max_height_ratio=0.9,
+    )
 
     cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     default_template_path = _resolve_bundled_resource(
@@ -470,6 +1162,12 @@ def gui():
     output_folder_var = StringVar(value=os.path.join(cwd, "Output"))
     crop_selection = None
     crop_summary_var = StringVar(value="Full scene")
+    io_change_state = {
+        "modified_since_load": False,
+        "suspend_tracking": False,
+        "last_input_value": "",
+        "last_output_value": output_folder_var.get(),
+    }
 
     selected_target_names = []
     scalar_values = dict(template_config["scalar_fields"])
@@ -480,6 +1178,7 @@ def gui():
             sensor_name: sensor_config.default_selected_band_indices(template)
             for sensor_name, template in sensor_templates.items()
         },
+        "band_mapping_configs": {},
     }
 
     def select_file_im():
@@ -492,11 +1191,11 @@ def gui():
         if files:
             input_files = list(files)
             input_image_var.set(_display_input_selection(input_files))
-            clear_crop_selection()
         else:
             input_files = []
             input_image_var.set("")
-            clear_crop_selection()
+        sensor_state["band_mapping_configs"].clear()
+        update_sensor_ui()
 
     def select_folder():
         folder = askdirectory(parent=root, title="Choose the output folder")
@@ -519,6 +1218,7 @@ def gui():
         return sensor_config.build_sensor_config(
             sensor_templates[sensor_name],
             sensor_state["selected_indices"].get(sensor_name, []),
+            band_mapping=sensor_state["band_mapping_configs"].get(sensor_name),
         )
 
     siop_summary_var = StringVar()
@@ -608,9 +1308,18 @@ def gui():
         try:
             current_sensor = build_current_sensor()
             centers = [band["center"] for band in current_sensor["bands"]]
+            mapping_config = current_sensor.get("band_mapping") or {}
+            mapping_suffix = ""
+            if mapping_config.get("image_band_indices"):
+                mapping_mode = str(mapping_config.get("mode", "manual")).strip().lower()
+                mapping_count = len(mapping_config.get("image_band_indices") or [])
+                if mapping_mode == "manual":
+                    mapping_suffix = f" Explicit input-band mapping set for {mapping_count} band(s)."
+                else:
+                    mapping_suffix = f" Input bands auto-linked for {mapping_count} band(s)."
             sensor_summary_var.set(
                 f"{current_sensor['sensor_name']}: {len(centers)} band(s) selected "
-                f"({_format_sensor_centers(centers)})."
+                f"({_format_sensor_centers(centers)}).{mapping_suffix}"
             )
         except Exception as exc:
             sensor_name = sensor_state["sensor_name"]
@@ -634,21 +1343,57 @@ def gui():
             return [path for path in input_files if str(path).strip()]
         return [text] if text else []
 
+    def _normalise_crop_selection(selection):
+        if not selection:
+            return None
+        normalized = dict(selection)
+        bbox = normalized.get("bbox")
+        if bbox:
+            try:
+                min_lon = float(min(bbox["min_lon"], bbox["max_lon"]))
+                max_lon = float(max(bbox["min_lon"], bbox["max_lon"]))
+                min_lat = float(min(bbox["min_lat"], bbox["max_lat"]))
+                max_lat = float(max(bbox["min_lat"], bbox["max_lat"]))
+            except Exception:
+                bbox = None
+            else:
+                if max_lon > min_lon and max_lat > min_lat:
+                    bbox = {
+                        "min_lon": min_lon,
+                        "max_lon": max_lon,
+                        "min_lat": min_lat,
+                        "max_lat": max_lat,
+                    }
+                else:
+                    bbox = None
+        else:
+            bbox = None
+        mask_path = str(normalized.get("mask_path") or "").strip()
+        normalized["bbox"] = bbox
+        normalized["mask_path"] = mask_path
+        if not bbox and not mask_path:
+            return None
+        return normalized
+
     def _format_crop_summary(selection):
         if not selection:
             return "Full scene"
-        row_start = int(selection["row_start"])
-        row_end = int(selection["row_end"])
-        col_start = int(selection["col_start"])
-        col_end = int(selection["col_end"])
-        return (
-            f"Rows {row_start}:{row_end}, cols {col_start}:{col_end} "
-            f"({row_end - row_start} x {col_end - col_start} px)"
-        )
+        parts = []
+        bbox = selection.get("bbox")
+        if bbox:
+            parts.append(
+                "BBox "
+                f"lon {bbox['min_lon']:.5f} to {bbox['max_lon']:.5f}, "
+                f"lat {bbox['min_lat']:.5f} to {bbox['max_lat']:.5f}"
+            )
+        mask_path = str(selection.get("mask_path") or "").strip()
+        if mask_path:
+            parts.append(f"Mask {os.path.basename(mask_path)}")
+        return " | ".join(parts) if parts else "Full scene"
 
     def _set_crop_selection(selection):
         nonlocal crop_selection
-        crop_selection = selection
+        crop_selection = _normalise_crop_selection(selection)
         crop_summary_var.set(_format_crop_summary(crop_selection))
         update_crop_button_state()
 
@@ -662,18 +1407,144 @@ def gui():
             return
         _set_widget_enabled(crop_button, bool(_current_input_file_list()))
 
+    def _run_with_loading_dialog(title_text, message_text, worker_func):
+        result_holder = {"done": False}
+
+        loading_popup = tk.Toplevel(root)
+        loading_popup.title(title_text)
+        apply_window_size(
+            loading_popup,
+            preferred_size=(420, 150),
+            minsize=(380, 140),
+            width_ratio=0.32,
+            height_ratio=0.18,
+            max_width_ratio=0.38,
+            max_height_ratio=0.24,
+        )
+        loading_popup.transient(root)
+        loading_popup.grab_set()
+        loading_popup.resizable(False, False)
+        loading_popup.protocol("WM_DELETE_WINDOW", lambda: None)
+        loading_popup.columnconfigure(0, weight=1)
+        loading_popup.rowconfigure(0, weight=1)
+
+        container = ttk.Frame(loading_popup, padding=14)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            container,
+            text=message_text,
+            wraplength=340,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
+
+        progress = ttk.Progressbar(container, mode="indeterminate", length=320)
+        progress.grid(row=1, column=0, sticky="ew", pady=(14, 0))
+        progress.start(10)
+
+        def _worker():
+            try:
+                result_holder["result"] = worker_func()
+            except Exception as exc:
+                result_holder["error"] = exc
+            finally:
+                result_holder["done"] = True
+
+        def _poll():
+            if result_holder.get("done"):
+                try:
+                    progress.stop()
+                finally:
+                    if loading_popup.winfo_exists():
+                        loading_popup.destroy()
+                return
+            loading_popup.after(75, _poll)
+
+        threading.Thread(target=_worker, daemon=True).start()
+        center_window(loading_popup, max_width_ratio=0.5, max_height_ratio=0.3)
+        loading_popup.after(75, _poll)
+        root.wait_window(loading_popup)
+
+        if "error" in result_holder:
+            raise result_holder["error"]
+        return result_holder.get("result")
+
     def _sync_input_files_with_entry(*_args):
         nonlocal input_files
         if input_files and input_image_var.get() != _display_input_selection(input_files):
             input_files = []
-            clear_crop_selection()
-        current_files = _current_input_file_list()
-        if crop_selection and current_files:
-            crop_source_path = crop_selection.get("source_path")
-            if crop_source_path and not _paths_equivalent(current_files[0], crop_source_path):
-                clear_crop_selection()
+            sensor_state["band_mapping_configs"].clear()
+            update_sensor_ui()
         update_crop_button_state()
         update_run_button_state()
+
+    def _track_input_field_change(*_args):
+        current_value = input_image_var.get()
+        if current_value == io_change_state["last_input_value"]:
+            return
+        io_change_state["last_input_value"] = current_value
+        if not io_change_state["suspend_tracking"]:
+            io_change_state["modified_since_load"] = True
+            if sensor_state["band_mapping_configs"]:
+                sensor_state["band_mapping_configs"].clear()
+                update_sensor_ui()
+
+    def _track_output_field_change(*_args):
+        current_value = output_folder_var.get()
+        if current_value == io_change_state["last_output_value"]:
+            return
+        io_change_state["last_output_value"] = current_value
+        if not io_change_state["suspend_tracking"]:
+            io_change_state["modified_since_load"] = True
+
+    def _prepare_crop_window_request(first_image):
+        preview_data, preview_info = _load_preview_band_from_netcdf(first_image, sensor_state["sensor_name"])
+
+        lat_grid = preview_info.get("lat_grid")
+        lon_grid = preview_info.get("lon_grid")
+        if lat_grid is None or lon_grid is None:
+            raise RuntimeError("The crop tool requires latitude and longitude coordinates in the input NetCDF.")
+
+        finite_coord_mask = np.isfinite(lat_grid) & np.isfinite(lon_grid)
+        if not np.any(finite_coord_mask):
+            raise RuntimeError("The crop tool requires valid latitude and longitude coordinates.")
+
+        lon_min = float(np.nanmin(lon_grid[finite_coord_mask]))
+        lon_max = float(np.nanmax(lon_grid[finite_coord_mask]))
+        lat_min = float(np.nanmin(lat_grid[finite_coord_mask]))
+        lat_max = float(np.nanmax(lat_grid[finite_coord_mask]))
+
+        existing_selection = _normalise_crop_selection(crop_selection) or {"bbox": None, "mask_path": ""}
+        existing_source_path = str(existing_selection.get("source_path") or "").strip()
+        if existing_source_path and not _paths_equivalent(existing_source_path, first_image):
+            existing_selection = {"bbox": None, "mask_path": ""}
+
+        existing_mask_geometries = []
+        existing_mask_path = str(existing_selection.get("mask_path") or "").strip()
+        if existing_mask_path:
+            try:
+                existing_mask_geometries = _load_vector_mask_geometries(existing_mask_path)
+            except Exception:
+                existing_selection["mask_path"] = ""
+
+        return {
+            "title": "Crop area",
+            "image_name": os.path.basename(first_image),
+            "source_name": preview_info["source_name"],
+            "sensor_name": sensor_state["sensor_name"],
+            "preview_description": preview_info.get("preview_description", preview_info["source_name"]),
+            "preview_data": preview_data,
+            "lon_min": lon_min,
+            "lon_max": lon_max,
+            "lat_min": lat_min,
+            "lat_max": lat_max,
+            "selection": {
+                "bbox": existing_selection.get("bbox"),
+                "mask_path": existing_selection.get("mask_path", ""),
+                "mask_geometries": existing_mask_geometries,
+            },
+        }
 
     def open_crop_popup():
         current_files = _current_input_file_list()
@@ -687,183 +1558,25 @@ def gui():
             return
 
         try:
-            preview_data, preview_info = _load_preview_band_from_netcdf(first_image)
+            request_payload = _run_with_loading_dialog(
+                "Loading crop tool",
+                "Preparing the preview and crop interface...",
+                lambda: _prepare_crop_window_request(first_image),
+            )
+            selection = _open_leaflet_crop_window(cwd, request_payload)
         except Exception as exc:
             messagebox.showerror(
-                "Preview unavailable",
-                f"Unable to open a preview from:\n{first_image}\n\n{exc}",
+                "Leaflet crop unavailable",
+                f"Unable to open the Leaflet crop window.\n\n{exc}",
                 parent=root,
             )
             return
 
-        try:
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-            from matplotlib.figure import Figure
-            from matplotlib.patches import Rectangle
-            from matplotlib.widgets import RectangleSelector
-        except Exception as exc:
-            messagebox.showerror(
-                "Missing dependency",
-                f"The crop tool requires matplotlib.\n\n{exc}",
-                parent=root,
-            )
+        if selection is None:
             return
 
-        popup = tk.Toplevel(root)
-        popup.title("Crop area")
-        popup.geometry("1100x820")
-        popup.minsize(900, 680)
-
-        outer = ttk.Frame(popup, padding=8)
-        outer.pack(fill="both", expand=True)
-
-        ttk.Label(
-            outer,
-            text=(
-                "Previewing the first band of the first selected image. "
-                "Use the toolbar to zoom or pan, then click 'Draw rectangle' and drag on the image. "
-                "Only the selected rectangle will be processed. If no rectangle is kept, the full scene is used."
-            ),
-            wraplength=1020,
-            justify="left",
-        ).pack(fill="x", pady=(0, 8))
-
-        figure = Figure(figsize=(8.5, 6.5), dpi=100)
-        axis = figure.add_subplot(111)
-        figure.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.08)
-
-        finite_mask = np.isfinite(preview_data)
-        if np.any(finite_mask):
-            valid_values = preview_data[finite_mask]
-            vmin = float(np.nanpercentile(valid_values, 2))
-            vmax = float(np.nanpercentile(valid_values, 98))
-            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
-                vmin = float(np.nanmin(valid_values))
-                vmax = float(np.nanmax(valid_values))
-        else:
-            vmin, vmax = 0.0, 1.0
-
-        image_artist = axis.imshow(
-            preview_data,
-            cmap="viridis",
-            origin="upper",
-            interpolation="nearest",
-            vmin=vmin,
-            vmax=vmax,
-        )
-        axis.set_title(f"{os.path.basename(first_image)} - {preview_info['source_name']}")
-        axis.set_xlabel("Column")
-        axis.set_ylabel("Row")
-        figure.colorbar(image_artist, ax=axis, fraction=0.045, pad=0.02)
-
-        canvas = FigureCanvasTkAgg(figure, master=outer)
-        canvas_widget = canvas.get_tk_widget()
-        canvas_widget.pack(fill="both", expand=True)
-
-        toolbar = NavigationToolbar2Tk(canvas, outer, pack_toolbar=False)
-        toolbar.update()
-        toolbar.pack(fill="x", pady=(6, 0))
-
-        controls = ttk.Frame(outer)
-        controls.pack(fill="x", pady=(8, 0))
-        controls.columnconfigure(0, weight=1)
-
-        selection_var = StringVar(value=_format_crop_summary(crop_selection))
-        ttk.Label(controls, textvariable=selection_var).grid(row=0, column=0, sticky="w")
-
-        current_patch = {"artist": None}
-        selection_box = {"value": dict(crop_selection) if crop_selection else None}
-
-        def _draw_rectangle_overlay(selection):
-            if current_patch["artist"] is not None:
-                try:
-                    current_patch["artist"].remove()
-                except Exception:
-                    pass
-                current_patch["artist"] = None
-            if not selection:
-                selection_var.set("Full scene")
-                canvas.draw_idle()
-                return
-            rect = Rectangle(
-                (selection["col_start"], selection["row_start"]),
-                selection["col_end"] - selection["col_start"],
-                selection["row_end"] - selection["row_start"],
-                fill=False,
-                edgecolor="#ff3366",
-                linewidth=2.0,
-            )
-            axis.add_patch(rect)
-            current_patch["artist"] = rect
-            selection_var.set(_format_crop_summary(selection))
-            canvas.draw_idle()
-
-        def _normalise_selection(x1, y1, x2, y2):
-            if any(value is None for value in (x1, y1, x2, y2)):
-                return None
-            col_start = int(np.floor(min(x1, x2)))
-            col_end = int(np.ceil(max(x1, x2)))
-            row_start = int(np.floor(min(y1, y2)))
-            row_end = int(np.ceil(max(y1, y2)))
-            col_start = max(0, min(int(preview_info["width"]), col_start))
-            col_end = max(0, min(int(preview_info["width"]), col_end))
-            row_start = max(0, min(int(preview_info["height"]), row_start))
-            row_end = max(0, min(int(preview_info["height"]), row_end))
-            if col_end <= col_start or row_end <= row_start:
-                return None
-            return {
-                "row_start": row_start,
-                "row_end": row_end,
-                "col_start": col_start,
-                "col_end": col_end,
-                "source_height": int(preview_info["height"]),
-                "source_width": int(preview_info["width"]),
-                "source_path": first_image,
-            }
-
-        def _on_select(eclick, erelease):
-            selection = _normalise_selection(
-                getattr(eclick, "xdata", None),
-                getattr(eclick, "ydata", None),
-                getattr(erelease, "xdata", None),
-                getattr(erelease, "ydata", None),
-            )
-            selection_box["value"] = selection
-            _draw_rectangle_overlay(selection)
-
-        selector = RectangleSelector(
-            axis,
-            _on_select,
-            useblit=True,
-            button=[1],
-            interactive=True,
-            drag_from_anywhere=True,
-            minspanx=2,
-            minspany=2,
-            spancoords="pixels",
-        )
-        selector.set_active(True)
-
-        def _activate_draw():
-            selector.set_active(True)
-
-        def _clear_local_selection():
-            selection_box["value"] = None
-            _draw_rectangle_overlay(None)
-
-        def _accept_crop():
-            _set_crop_selection(selection_box["value"])
-            popup.destroy()
-
-        ttk.Button(controls, text="Draw rectangle", command=_activate_draw).grid(row=0, column=1, sticky="e", padx=(8, 0))
-        ttk.Button(controls, text="Clear", command=_clear_local_selection).grid(row=0, column=2, sticky="e", padx=(8, 0))
-        ttk.Button(controls, text="Cancel", command=popup.destroy).grid(row=0, column=3, sticky="e", padx=(8, 0))
-        ttk.Button(controls, text="OK", command=_accept_crop).grid(row=0, column=4, sticky="e", padx=(8, 0))
-
-        if crop_selection:
-            _draw_rectangle_overlay(crop_selection)
-
-        center_window(popup)
+        selection["source_path"] = first_image
+        _set_crop_selection(selection)
 
     def _get_form_validation_error():
         current_files = _current_input_file_list()
@@ -875,6 +1588,11 @@ def gui():
 
         if not output_folder_var.get().strip():
             return "Please choose an output folder."
+
+        if crop_selection:
+            mask_path = str(crop_selection.get("mask_path") or "").strip()
+            if mask_path and not os.path.isfile(mask_path):
+                return f"Shapefile mask not found: {mask_path}"
 
         if bathy_mode.get() == "input":
             selected_bathy = bathy_path_var.get().strip() or _resolve_bundled_resource(
@@ -938,8 +1656,16 @@ def gui():
                            geometry="760x300", minsize=(700, 240)):
         popup = tk.Toplevel(root)
         popup.title(title)
-        popup.geometry(geometry)
-        popup.minsize(*minsize)
+        preferred_size = _parse_geometry_size(geometry)
+        apply_window_size(
+            popup,
+            preferred_size=preferred_size,
+            minsize=minsize,
+            width_ratio=0.62,
+            height_ratio=0.34,
+            max_width_ratio=0.78,
+            max_height_ratio=0.6,
+        )
         popup.transient(root)
         popup.grab_set()
         popup.columnconfigure(0, weight=1)
@@ -952,7 +1678,7 @@ def gui():
         ttk.Label(
             container,
             text=description,
-            wraplength=max(minsize[0] - 40, 620),
+            wraplength=max(popup.winfo_width() - 60, 620),
             justify="left",
         ).grid(row=0, column=0, sticky="w", pady=(0, 10))
 
@@ -1084,7 +1810,8 @@ def gui():
         open_feature_popup(
             "Initial guess optimisation",
             "Before the main optimisation, the workflow can test several starting points for each pixel and keep the combination that gives the lowest forward-model error. "
-            "Standard mode tests 3 values per variable. The optional 5-point mode also includes the user minimum and maximum bounds.",
+            "Standard mode tests exactly 3 values per variable: 25%, mean, and 75% of the user bounds. "
+            "If 'Use 5 initial guess testing' is enabled, it tests exactly 5 values: min, 25%, mean, 75%, and max.",
             settings_builder=build_settings,
             apply_callback=apply_initial_guess_changes,
             geometry="780x320",
@@ -1201,9 +1928,15 @@ def gui():
 
         popup = tk.Toplevel(root)
         popup.title("Sensor Configuration")
-        popup_height = max(680, int(popup.winfo_screenheight() * 0.9))
-        popup.geometry(f"980x{popup_height}")
-        popup.minsize(900, 680)
+        apply_window_size(
+            popup,
+            preferred_size=(1120, 860),
+            minsize=(920, 700),
+            width_ratio=0.9,
+            height_ratio=0.88,
+            max_width_ratio=0.94,
+            max_height_ratio=0.92,
+        )
         popup.transient(root)
         popup.grab_set()
 
@@ -1212,6 +1945,20 @@ def gui():
             sensor_name: list(indices)
             for sensor_name, indices in sensor_state["selected_indices"].items()
         }
+        local_mapping_state = {
+            sensor_name: _clone_sensor_band_mapping_config(mapping)
+            for sensor_name, mapping in sensor_state["band_mapping_configs"].items()
+            if mapping
+        }
+        current_input_files = _current_input_file_list()
+        current_image_path = current_input_files[0] if current_input_files else ""
+        current_image_band_info = None
+        current_image_band_error = ""
+        if current_image_path and os.path.isfile(current_image_path):
+            try:
+                current_image_band_info = _load_input_image_band_info(current_image_path)
+            except Exception as exc:
+                current_image_band_error = str(exc)
 
         popup.columnconfigure(0, weight=1)
         popup.rowconfigure(0, weight=1)
@@ -1222,6 +1969,7 @@ def gui():
         popup_container.columnconfigure(1, weight=1)
         popup_container.rowconfigure(0, weight=1)
         popup_container.rowconfigure(1, weight=0)
+        popup_container.rowconfigure(2, weight=0)
 
         sensor_frame = ttk.Labelframe(popup_container, text="Sensor")
         sensor_frame.grid(row=0, column=0, sticky="nsw", padx=(0, 10), pady=(0, 8))
@@ -1285,6 +2033,48 @@ def gui():
         ttk.Label(smart_frame, text="Every nth band").grid(row=0, column=4, sticky="w")
         ttk.Entry(smart_frame, textvariable=range_step_var, width=6).grid(row=0, column=5, sticky="w", padx=(4, 10))
 
+        mapping_frame = ttk.Labelframe(popup_container, text="Input Image Band Mapping")
+        mapping_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, 8))
+        mapping_frame.columnconfigure(0, weight=1)
+        mapping_frame.rowconfigure(2, weight=1)
+
+        mapping_status_var = StringVar()
+        ttk.Label(mapping_frame, textvariable=mapping_status_var, wraplength=980, justify="left").grid(
+            row=0, column=0, sticky="w", padx=4, pady=(0, 6)
+        )
+
+        mapping_controls = ttk.Frame(mapping_frame)
+        mapping_controls.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 6))
+        mapping_controls.columnconfigure(5, weight=1)
+
+        mapping_tolerance_var = StringVar(value="10")
+        ttk.Label(mapping_controls, text="Tolerance (nm)").grid(row=0, column=0, sticky="w")
+        mapping_tolerance_entry = ttk.Entry(mapping_controls, textvariable=mapping_tolerance_var, width=8)
+        mapping_tolerance_entry.grid(row=0, column=1, sticky="w", padx=(6, 10))
+        auto_match_button = ttk.Button(mapping_controls, text="Auto-match")
+        auto_match_button.grid(row=0, column=2, sticky="w")
+
+        mapping_detail_frame = ttk.Frame(mapping_frame)
+        mapping_detail_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        mapping_detail_frame.columnconfigure(0, weight=1)
+        mapping_detail_frame.rowconfigure(0, weight=1)
+
+        manual_mapping_frame = ttk.Frame(mapping_detail_frame)
+        manual_mapping_frame.columnconfigure(1, weight=1)
+
+        mapping_tree = ttk.Treeview(
+            mapping_detail_frame,
+            columns=("sensor_band", "image_band", "delta_nm"),
+            show="headings",
+            height=10,
+        )
+        mapping_tree.heading("sensor_band", text="Sensor band")
+        mapping_tree.heading("image_band", text="Input image band")
+        mapping_tree.heading("delta_nm", text="Delta (nm)")
+        mapping_tree.column("sensor_band", width=150, anchor="w")
+        mapping_tree.column("image_band", width=420, anchor="w")
+        mapping_tree.column("delta_nm", width=90, anchor="center")
+
         def _ensure_local_selection_defaults():
             for sensor_name, template in sensor_templates.items():
                 local_selected_indices.setdefault(
@@ -1300,6 +2090,254 @@ def gui():
         def current_template():
             sensor_name = local_sensor_name.get()
             return sensor_templates.get(sensor_name)
+
+        def current_selected_sensor_indices():
+            template = current_template()
+            if template is None:
+                return []
+            return list(local_selected_indices.get(template["sensor_name"], []))
+
+        def _get_current_local_mapping():
+            return local_mapping_state.get(local_sensor_name.get()) or {}
+
+        def _set_current_local_mapping(mapping):
+            sensor_name = local_sensor_name.get()
+            if not sensor_name:
+                return
+            if mapping:
+                local_mapping_state[sensor_name] = mapping
+            else:
+                local_mapping_state.pop(sensor_name, None)
+
+        def _build_mapping_payload_from_lookup(template, selected_indices, lookup, mode, tolerance_nm):
+            if template is None or not current_image_band_info:
+                return None
+            sensor_band_indices = []
+            sensor_band_centers = []
+            image_band_indices = []
+            image_band_labels = []
+            image_band_wavelengths = []
+            for sensor_index in selected_indices:
+                if int(sensor_index) not in lookup:
+                    continue
+                source_index = int(lookup[int(sensor_index)])
+                if source_index < 0 or source_index >= len(current_image_band_info["bands"]):
+                    continue
+                sensor_band = next((band for band in template["bands"] if int(band["index"]) == int(sensor_index)), None)
+                if sensor_band is None:
+                    continue
+                source_band = current_image_band_info["bands"][source_index]
+                sensor_band_indices.append(int(sensor_index))
+                sensor_band_centers.append(float(sensor_band["center"]))
+                image_band_indices.append(int(source_index))
+                image_band_labels.append(source_band["label"])
+                image_band_wavelengths.append(source_band.get("wavelength"))
+            if not image_band_indices:
+                return None
+            return {
+                "mode": str(mode),
+                "tolerance_nm": float(tolerance_nm),
+                "source_kind": current_image_band_info.get("source_kind", ""),
+                "source_name": current_image_band_info.get("source_name", ""),
+                "source_band_labels": list(current_image_band_info.get("labels") or []),
+                "source_band_wavelengths": list(current_image_band_info.get("wavelengths") or []),
+                "sensor_band_indices": sensor_band_indices,
+                "sensor_band_centers": sensor_band_centers,
+                "image_band_indices": image_band_indices,
+                "image_band_labels": image_band_labels,
+                "image_band_wavelengths": image_band_wavelengths,
+            }
+
+        def _ensure_mapping_state_for_current_sensor(force_auto=False):
+            template = current_template()
+            if template is None or not current_image_band_info:
+                return
+            sensor_name = template["sensor_name"]
+            selected_indices = current_selected_sensor_indices()
+            mapping = _clone_sensor_band_mapping_config(local_mapping_state.get(sensor_name))
+            if mapping and not _image_band_info_matches_mapping(current_image_band_info, mapping):
+                mapping = None
+
+            if mapping is None:
+                tolerance_nm = 10.0
+                lookup = {}
+                mode = "manual"
+            else:
+                tolerance_nm = float(mapping.get("tolerance_nm", 10.0))
+                lookup = _mapping_lookup_from_payload(mapping)
+                mode = str(mapping.get("mode", "manual")).strip().lower() or "manual"
+
+            if force_auto or not mapping:
+                lookup, unmatched = _auto_match_sensor_band_lookup(
+                    template,
+                    selected_indices,
+                    current_image_band_info,
+                    tolerance_nm=tolerance_nm,
+                )
+                mode = "auto"
+                mapping = _build_mapping_payload_from_lookup(template, selected_indices, lookup, mode, tolerance_nm)
+                if unmatched and not mapping:
+                    _set_current_local_mapping(None)
+                    return
+                _set_current_local_mapping(mapping)
+                mapping_tolerance_var.set(str(int(tolerance_nm)) if float(tolerance_nm).is_integer() else f"{tolerance_nm:g}")
+                return
+
+            filtered_lookup = {int(key): int(value) for key, value in lookup.items() if int(key) in selected_indices}
+            mapping = _build_mapping_payload_from_lookup(template, selected_indices, filtered_lookup, mode, tolerance_nm)
+            _set_current_local_mapping(mapping)
+            mapping_tolerance_var.set(str(int(tolerance_nm)) if float(tolerance_nm).is_integer() else f"{tolerance_nm:g}")
+
+        def _render_mapping_ui():
+            for child in manual_mapping_frame.winfo_children():
+                child.destroy()
+            manual_mapping_frame.grid_remove()
+            mapping_tree.grid_remove()
+
+            if current_image_band_error:
+                mapping_status_var.set(
+                    f"Unable to inspect the selected input image for band linking.\n{current_image_band_error}"
+                )
+                _set_widget_enabled(auto_match_button, False)
+                _set_widget_enabled(mapping_tolerance_entry, False)
+                return
+
+            if not current_image_band_info:
+                mapping_status_var.set(
+                    "Select an input image before configuring explicit band linking. Without it, SWAMpy will fall back to wavelength-based alignment at run time."
+                )
+                _set_widget_enabled(auto_match_button, False)
+                _set_widget_enabled(mapping_tolerance_entry, False)
+                return
+
+            template = current_template()
+            if template is None:
+                mapping_status_var.set("No sensor template is available for band linking.")
+                _set_widget_enabled(auto_match_button, False)
+                _set_widget_enabled(mapping_tolerance_entry, False)
+                return
+
+            _set_widget_enabled(auto_match_button, True)
+            _set_widget_enabled(mapping_tolerance_entry, True)
+
+            selected_indices = current_selected_sensor_indices()
+            mapping = _get_current_local_mapping()
+            lookup = _mapping_lookup_from_payload(mapping)
+            mode = str(mapping.get("mode", "manual")).strip().lower() if mapping else "manual"
+            matched_count = sum(1 for sensor_index in selected_indices if int(sensor_index) in lookup)
+            unmatched_count = max(0, len(selected_indices) - matched_count)
+            source_count = int(current_image_band_info.get("band_count", 0))
+            source_name = current_image_band_info.get("source_name", "input image")
+            mapping_status_var.set(
+                f"Detected {source_count} input image band(s) from '{source_name}'. "
+                f"{matched_count} selected sensor band(s) are linked and {unmatched_count} remain unmatched. "
+                f"Mode: {mode}."
+            )
+
+            use_summary_view = bool(current_image_band_info.get("is_hyperspectral")) or len(selected_indices) > 15
+            if use_summary_view:
+                mapping_tree.grid(row=0, column=0, sticky="nsew")
+                for item in mapping_tree.get_children():
+                    mapping_tree.delete(item)
+                for sensor_index in selected_indices:
+                    sensor_band = next((band for band in template["bands"] if int(band["index"]) == int(sensor_index)), None)
+                    if sensor_band is None:
+                        continue
+                    source_index = lookup.get(int(sensor_index))
+                    if source_index is None or source_index >= len(current_image_band_info["bands"]):
+                        image_band_label = "Unmatched"
+                        delta_text = ""
+                    else:
+                        source_band = current_image_band_info["bands"][int(source_index)]
+                        image_band_label = source_band["label"]
+                        source_wavelength = source_band.get("wavelength")
+                        if source_wavelength is None:
+                            delta_text = ""
+                        else:
+                            delta_text = f"{abs(float(source_wavelength) - float(sensor_band['center'])):.1f}"
+                    mapping_tree.insert(
+                        "",
+                        "end",
+                        values=(sensor_band["label"], image_band_label, delta_text),
+                    )
+                return
+
+            manual_mapping_frame.grid(row=0, column=0, sticky="nsew")
+            manual_mapping_frame.columnconfigure(1, weight=1)
+            source_bands = list(current_image_band_info.get("bands") or [])
+            source_options = ["-- Not linked --"] + [band["label"] for band in source_bands]
+            source_label_to_index = {band["label"]: int(band["index"]) for band in source_bands}
+
+            for row_index, sensor_index in enumerate(selected_indices):
+                sensor_band = next((band for band in template["bands"] if int(band["index"]) == int(sensor_index)), None)
+                if sensor_band is None:
+                    continue
+                ttk.Label(manual_mapping_frame, text=sensor_band["label"]).grid(row=row_index, column=0, sticky="w", padx=(0, 8), pady=2)
+                selected_source_index = lookup.get(int(sensor_index))
+                initial_label = "-- Not linked --"
+                if selected_source_index is not None and 0 <= int(selected_source_index) < len(source_bands):
+                    initial_label = source_bands[int(selected_source_index)]["label"]
+                combo_var = StringVar(value=initial_label)
+                combo = ttk.Combobox(
+                    manual_mapping_frame,
+                    values=source_options,
+                    state="readonly",
+                    textvariable=combo_var,
+                )
+                combo.grid(row=row_index, column=1, sticky="ew", pady=2)
+                delta_var = StringVar(value="")
+                ttk.Label(manual_mapping_frame, textvariable=delta_var, width=12).grid(row=row_index, column=2, sticky="w", padx=(8, 0), pady=2)
+
+                def on_combo_change(*_args, sensor_band_index=int(sensor_index), local_var=combo_var, local_delta_var=delta_var, sensor_center=float(sensor_band["center"])):
+                    selected_label = local_var.get()
+                    current_mapping = _clone_sensor_band_mapping_config(_get_current_local_mapping()) or {}
+                    current_lookup = _mapping_lookup_from_payload(current_mapping)
+                    if selected_label == "-- Not linked --":
+                        current_lookup.pop(sensor_band_index, None)
+                        local_delta_var.set("")
+                    else:
+                        source_index = source_label_to_index[selected_label]
+                        current_lookup[sensor_band_index] = int(source_index)
+                        source_wavelength = source_bands[int(source_index)].get("wavelength")
+                        if source_wavelength is None:
+                            local_delta_var.set("")
+                        else:
+                            local_delta_var.set(f"{abs(float(source_wavelength) - sensor_center):.1f} nm")
+                    tolerance_text = mapping_tolerance_var.get().strip() or "10"
+                    try:
+                        tolerance_nm = float(tolerance_text)
+                    except ValueError:
+                        tolerance_nm = 10.0
+                    updated_mapping = _build_mapping_payload_from_lookup(
+                        template,
+                        selected_indices,
+                        current_lookup,
+                        "manual",
+                        tolerance_nm,
+                    )
+                    _set_current_local_mapping(updated_mapping)
+
+                combo_var.trace_add("write", on_combo_change)
+                if initial_label != "-- Not linked --":
+                    initial_wavelength = source_bands[int(selected_source_index)].get("wavelength")
+                    if initial_wavelength is not None:
+                        delta_var.set(f"{abs(float(initial_wavelength) - float(sensor_band['center'])):.1f} nm")
+
+        def auto_match_current_sensor_bands():
+            template = current_template()
+            if template is None or not current_image_band_info:
+                return
+            tolerance_text = mapping_tolerance_var.get().strip() or "10"
+            try:
+                tolerance_nm = float(tolerance_text)
+            except ValueError:
+                messagebox.showerror("Invalid tolerance", "Tolerance must be numeric.", parent=popup)
+                return
+            current_mapping = _clone_sensor_band_mapping_config(_get_current_local_mapping()) or {}
+            current_mapping["tolerance_nm"] = tolerance_nm
+            _set_current_local_mapping(current_mapping)
+            _ensure_mapping_state_for_current_sensor(force_auto=True)
+            _render_mapping_ui()
 
         def sync_current_selection():
             template = current_template()
@@ -1357,6 +2395,7 @@ def gui():
             if template is None:
                 smart_frame.grid_remove()
                 update_selection_status()
+                _render_mapping_ui()
                 return
 
             for band in template["bands"]:
@@ -1372,6 +2411,8 @@ def gui():
             else:
                 smart_frame.grid_remove()
             update_selection_status()
+            _ensure_mapping_state_for_current_sensor()
+            _render_mapping_ui()
 
         def apply_selection(indices):
             template = current_template()
@@ -1383,6 +2424,8 @@ def gui():
             for idx in deduped:
                 bands_listbox.selection_set(idx)
             update_selection_status()
+            _ensure_mapping_state_for_current_sensor()
+            _render_mapping_ui()
 
         def select_all_bands():
             template = current_template()
@@ -1434,6 +2477,9 @@ def gui():
             for sensor_name in list(sensor_state["selected_indices"].keys()):
                 if sensor_name not in sensor_templates:
                     del sensor_state["selected_indices"][sensor_name]
+            for sensor_name in list(sensor_state["band_mapping_configs"].keys()):
+                if sensor_name not in sensor_templates:
+                    del sensor_state["band_mapping_configs"][sensor_name]
             for sensor_name, template in sensor_templates.items():
                 sensor_state["selected_indices"][sensor_name] = list(
                     local_selected_indices.get(
@@ -1474,8 +2520,15 @@ def gui():
         def open_add_sensor_popup():
             add_popup = tk.Toplevel(popup)
             add_popup.title("Add sensor")
-            add_popup.geometry("780x220")
-            add_popup.minsize(720, 210)
+            apply_window_size(
+                add_popup,
+                preferred_size=(860, 320),
+                minsize=(720, 230),
+                width_ratio=0.68,
+                height_ratio=0.34,
+                max_width_ratio=0.74,
+                max_height_ratio=0.4,
+            )
             add_popup.transient(popup)
             add_popup.grab_set()
             add_popup.columnconfigure(0, weight=1)
@@ -1556,8 +2609,15 @@ def gui():
         def open_remove_sensor_popup():
             remove_popup = tk.Toplevel(popup)
             remove_popup.title("Remove sensors")
-            remove_popup.geometry("500x420")
-            remove_popup.minsize(440, 360)
+            apply_window_size(
+                remove_popup,
+                preferred_size=(640, 520),
+                minsize=(500, 380),
+                width_ratio=0.5,
+                height_ratio=0.52,
+                max_width_ratio=0.58,
+                max_height_ratio=0.62,
+            )
             remove_popup.transient(popup)
             remove_popup.grab_set()
             remove_popup.columnconfigure(0, weight=1)
@@ -1651,12 +2711,39 @@ def gui():
         def on_band_selection(_event=None):
             sync_current_selection()
             update_selection_status()
+            _ensure_mapping_state_for_current_sensor()
+            _render_mapping_ui()
 
         def apply_sensor_changes():
             sensor_name = local_sensor_name.get()
             if sensor_name not in sensor_templates:
                 messagebox.showerror("Unavailable sensor", sensor_load_errors.get(sensor_name, "Template not available."), parent=popup)
                 return
+            current_mapping = _clone_sensor_band_mapping_config(local_mapping_state.get(sensor_name))
+            if current_image_band_info:
+                selected_indices = list(local_selected_indices.get(sensor_name, []))
+                lookup = _mapping_lookup_from_payload(current_mapping or {})
+                missing_sensor_indices = [sensor_index for sensor_index in selected_indices if int(sensor_index) not in lookup]
+                if missing_sensor_indices:
+                    missing_labels = []
+                    for sensor_index in missing_sensor_indices:
+                        band = next((band for band in sensor_templates[sensor_name]["bands"] if int(band["index"]) == int(sensor_index)), None)
+                        missing_labels.append(band["label"] if band is not None else f"Band {sensor_index}")
+                    messagebox.showerror(
+                        "Incomplete band mapping",
+                        "Link every selected sensor band to an input image band before applying the sensor setup.\n\n"
+                        f"Missing: {', '.join(missing_labels)}",
+                        parent=popup,
+                    )
+                    return
+                image_band_indices = list((current_mapping or {}).get("image_band_indices") or [])
+                if len(set(image_band_indices)) != len(image_band_indices):
+                    messagebox.showerror(
+                        "Invalid band mapping",
+                        "Each selected sensor band must be linked to a different input image band.",
+                        parent=popup,
+                    )
+                    return
             sensor_state["sensor_name"] = sensor_name
             for key in list(sensor_state["selected_indices"].keys()):
                 if key not in sensor_templates:
@@ -1664,10 +2751,15 @@ def gui():
             for key, indices in local_selected_indices.items():
                 if key in sensor_templates:
                     sensor_state["selected_indices"][key] = list(indices)
+            if current_mapping and current_mapping.get("image_band_indices"):
+                sensor_state["band_mapping_configs"][sensor_name] = current_mapping
+            else:
+                sensor_state["band_mapping_configs"].pop(sensor_name, None)
             try:
                 sensor_config.build_sensor_config(
                     sensor_templates[sensor_name],
                     sensor_state["selected_indices"][sensor_name],
+                    band_mapping=sensor_state["band_mapping_configs"].get(sensor_name),
                 )
             except Exception as exc:
                 messagebox.showerror("Invalid sensor setup", str(exc), parent=popup)
@@ -1677,9 +2769,10 @@ def gui():
 
         local_sensor_name.trace_add("write", on_sensor_changed)
         bands_listbox.bind("<<ListboxSelect>>", on_band_selection)
+        auto_match_button.configure(command=auto_match_current_sensor_bands)
 
         popup_actions = ttk.Frame(popup_container)
-        popup_actions.grid(row=1, column=0, columnspan=2, sticky="ew")
+        popup_actions.grid(row=2, column=0, columnspan=2, sticky="ew")
         popup_actions.columnconfigure(0, weight=1)
         ttk.Button(popup_actions, text="Cancel", command=popup.destroy).grid(row=0, column=1, sticky="e", padx=(8, 0))
         ttk.Button(popup_actions, text="Apply", command=apply_sensor_changes).grid(row=0, column=2, sticky="e", padx=(8, 0))
@@ -1694,9 +2787,15 @@ def gui():
 
         popup = tk.Toplevel(root)
         popup.title("Water & Bottom Settings")
-        popup_height = max(680, int(popup.winfo_screenheight() * 0.9))
-        popup.geometry(f"1140x{popup_height}")
-        popup.minsize(980, 680)
+        apply_window_size(
+            popup,
+            preferred_size=(1260, 900),
+            minsize=(1000, 720),
+            width_ratio=0.92,
+            height_ratio=0.9,
+            max_width_ratio=0.95,
+            max_height_ratio=0.93,
+        )
         popup.transient(root)
         popup.grab_set()
 
@@ -1774,8 +2873,15 @@ def gui():
         def open_absorption_popup():
             absorption_popup = tk.Toplevel(popup)
             absorption_popup.title("Modify absorption of chl and water")
-            absorption_popup.geometry("900x260")
-            absorption_popup.minsize(760, 240)
+            apply_window_size(
+                absorption_popup,
+                preferred_size=(960, 320),
+                minsize=(780, 260),
+                width_ratio=0.72,
+                height_ratio=0.34,
+                max_width_ratio=0.8,
+                max_height_ratio=0.4,
+            )
             absorption_popup.transient(popup)
             absorption_popup.grab_set()
             absorption_popup.columnconfigure(0, weight=1)
@@ -2077,8 +3183,15 @@ def gui():
         def open_add_spectrum_popup():
             add_popup = tk.Toplevel(popup)
             add_popup.title("Add spectrum to library")
-            add_popup.geometry("760x260")
-            add_popup.minsize(700, 240)
+            apply_window_size(
+                add_popup,
+                preferred_size=(860, 340),
+                minsize=(720, 260),
+                width_ratio=0.68,
+                height_ratio=0.36,
+                max_width_ratio=0.74,
+                max_height_ratio=0.42,
+            )
             add_popup.transient(popup)
             add_popup.grab_set()
             add_popup.columnconfigure(0, weight=1)
@@ -2164,8 +3277,15 @@ def gui():
         def open_modify_spectrum_popup():
             modify_popup = tk.Toplevel(popup)
             modify_popup.title("Modify spectrum")
-            modify_popup.geometry("760x360")
-            modify_popup.minsize(700, 320)
+            apply_window_size(
+                modify_popup,
+                preferred_size=(860, 420),
+                minsize=(720, 340),
+                width_ratio=0.68,
+                height_ratio=0.42,
+                max_width_ratio=0.74,
+                max_height_ratio=0.5,
+            )
             modify_popup.transient(popup)
             modify_popup.grab_set()
             modify_popup.columnconfigure(0, weight=1)
@@ -2266,8 +3386,15 @@ def gui():
         def open_remove_spectra_popup():
             remove_popup = tk.Toplevel(popup)
             remove_popup.title("Remove spectra from library")
-            remove_popup.geometry("500x420")
-            remove_popup.minsize(440, 360)
+            apply_window_size(
+                remove_popup,
+                preferred_size=(640, 520),
+                minsize=(500, 380),
+                width_ratio=0.5,
+                height_ratio=0.52,
+                max_width_ratio=0.58,
+                max_height_ratio=0.62,
+            )
             remove_popup.transient(popup)
             remove_popup.grab_set()
             remove_popup.columnconfigure(0, weight=1)
@@ -2666,6 +3793,8 @@ def gui():
         bathy_tolerance,
     ):
         tracked_var.trace_add("write", update_run_button_state)
+    input_image_var.trace_add("write", _track_input_field_change)
+    output_folder_var.trace_add("write", _track_output_field_change)
     input_image_var.trace_add("write", _sync_input_files_with_entry)
     input_image_var.trace_add("write", update_crop_button_state)
     allow_split.trace_add("write", update_run_button_state)
@@ -2716,6 +3845,7 @@ def gui():
                 sensor_name: list(indices)
                 for sensor_name, indices in sensor_state["selected_indices"].items()
             }
+            new_sensor_mapping_configs = {}
 
             siop_popup_node = xml_root.find("siop_popup")
             if siop_popup_node is not None:
@@ -2778,10 +3908,47 @@ def gui():
                     matched_indices = sensor_config.default_selected_band_indices(sensor_templates[requested_sensor_name])
                 new_sensor_name = requested_sensor_name
                 new_sensor_indices[new_sensor_name] = matched_indices
+                mapping_enabled = _parse_bool_text(
+                    _xml_find_text(sensor_popup_node, "sensor_band_mapping_enabled"),
+                    False,
+                )
+                if mapping_enabled:
+                    source_band_labels = _xml_find_items(sensor_popup_node, "sensor_band_mapping_source_band_labels")
+                    source_band_wavelengths_raw = _xml_find_items(sensor_popup_node, "sensor_band_mapping_source_band_wavelengths")
+                    sensor_band_indices_raw = _xml_find_items(sensor_popup_node, "sensor_band_mapping_sensor_band_indices")
+                    sensor_band_centers_raw = _xml_find_items(sensor_popup_node, "sensor_band_mapping_sensor_band_centers")
+                    image_band_indices_raw = _xml_find_items(sensor_popup_node, "sensor_band_mapping_image_band_indices")
+                    image_band_labels = _xml_find_items(sensor_popup_node, "sensor_band_mapping_image_band_labels")
+                    image_band_wavelengths_raw = _xml_find_items(sensor_popup_node, "sensor_band_mapping_image_band_wavelengths")
+                    try:
+                        new_sensor_mapping_configs[new_sensor_name] = {
+                            "mode": _xml_find_text(sensor_popup_node, "sensor_band_mapping_mode", "manual") or "manual",
+                            "tolerance_nm": float(_xml_find_text(sensor_popup_node, "sensor_band_mapping_tolerance_nm", "10") or "10"),
+                            "source_kind": _xml_find_text(sensor_popup_node, "sensor_band_mapping_source_kind", "") or "",
+                            "source_name": _xml_find_text(sensor_popup_node, "sensor_band_mapping_source_name", "") or "",
+                            "source_band_labels": list(source_band_labels),
+                            "source_band_wavelengths": [
+                                None if str(value).strip().lower() in {"", "none", "nan"} else float(value)
+                                for value in source_band_wavelengths_raw
+                            ],
+                            "sensor_band_indices": [int(float(value)) for value in sensor_band_indices_raw],
+                            "sensor_band_centers": [float(value) for value in sensor_band_centers_raw],
+                            "image_band_indices": [int(float(value)) for value in image_band_indices_raw],
+                            "image_band_labels": list(image_band_labels),
+                            "image_band_wavelengths": [
+                                None if str(value).strip().lower() in {"", "none", "nan"} else float(value)
+                                for value in image_band_wavelengths_raw
+                            ],
+                        }
+                    except Exception:
+                        new_sensor_mapping_configs.pop(new_sensor_name, None)
+                else:
+                    new_sensor_mapping_configs.pop(new_sensor_name, None)
 
             compiled_sensor_candidate = sensor_config.build_sensor_config(
                 sensor_templates[new_sensor_name],
                 new_sensor_indices.get(new_sensor_name, []),
+                band_mapping=new_sensor_mapping_configs.get(new_sensor_name),
             )
         except Exception as exc:
             messagebox.showerror("Invalid run log", f"Unable to load settings from:\n{xml_path}\n\n{exc}")
@@ -2797,44 +3964,61 @@ def gui():
         sensor_state["sensor_name"] = compiled_sensor_candidate["sensor_name"]
         sensor_state["selected_indices"].update(new_sensor_indices)
         sensor_state["selected_indices"][compiled_sensor_candidate["sensor_name"]] = list(compiled_sensor_candidate["selected_indices"])
+        sensor_state["band_mapping_configs"] = {
+            sensor_name: _clone_sensor_band_mapping_config(mapping)
+            for sensor_name, mapping in new_sensor_mapping_configs.items()
+            if mapping
+        }
         compiled_siop = None
         compiled_sensor = None
+        show_overwrite_warning = bool(io_change_state["modified_since_load"])
 
-        loaded_images = _xml_find_items(xml_root, "images")
-        if not loaded_images:
-            loaded_image = _xml_find_text(xml_root, "image", "")
-            if loaded_image:
-                loaded_images = [loaded_image]
-        if loaded_images:
-            input_files = list(loaded_images)
-            input_image_var.set(_display_input_selection(input_files))
+        io_change_state["suspend_tracking"] = True
 
-        loaded_output_folder = _xml_find_text(xml_root, "output_folder", "")
-        if not loaded_output_folder:
-            loaded_output_folder = _infer_output_folder_from_output_file(_xml_find_text(xml_root, "output_file", ""))
-        if loaded_output_folder:
-            output_folder_var.set(loaded_output_folder)
+        try:
+            loaded_images = _xml_find_items(xml_root, "images")
+            if not loaded_images:
+                loaded_image = _xml_find_text(xml_root, "image", "")
+                if loaded_image:
+                    loaded_images = [loaded_image]
+            if loaded_images:
+                input_files = list(loaded_images)
+                input_image_var.set(_display_input_selection(input_files))
 
-        loaded_crop_enabled = _parse_bool_text(_xml_find_text(xml_root, "crop_enabled"), False)
-        if loaded_crop_enabled:
-            try:
-                loaded_crop = {
-                    "row_start": int(float(_xml_find_text(xml_root, "crop_row_start", "0"))),
-                    "row_end": int(float(_xml_find_text(xml_root, "crop_row_end", "0"))),
-                    "col_start": int(float(_xml_find_text(xml_root, "crop_col_start", "0"))),
-                    "col_end": int(float(_xml_find_text(xml_root, "crop_col_end", "0"))),
-                    "source_height": int(float(_xml_find_text(xml_root, "crop_source_height", "0"))),
-                    "source_width": int(float(_xml_find_text(xml_root, "crop_source_width", "0"))),
-                    "source_path": loaded_images[0] if loaded_images else _xml_find_text(xml_root, "crop_source_image", ""),
-                }
-                if loaded_crop["row_end"] > loaded_crop["row_start"] and loaded_crop["col_end"] > loaded_crop["col_start"]:
-                    _set_crop_selection(loaded_crop)
-                else:
+            loaded_output_folder = _xml_find_text(xml_root, "output_folder", "")
+            if not loaded_output_folder:
+                loaded_output_folder = _infer_output_folder_from_output_file(_xml_find_text(xml_root, "output_file", ""))
+            if loaded_output_folder:
+                output_folder_var.set(loaded_output_folder)
+
+            loaded_crop_enabled = _parse_bool_text(_xml_find_text(xml_root, "crop_enabled"), False)
+            if loaded_crop_enabled:
+                try:
+                    bbox = None
+                    min_lon_text = _xml_find_text(xml_root, "crop_min_lon")
+                    max_lon_text = _xml_find_text(xml_root, "crop_max_lon")
+                    min_lat_text = _xml_find_text(xml_root, "crop_min_lat")
+                    max_lat_text = _xml_find_text(xml_root, "crop_max_lat")
+                    if None not in (min_lon_text, max_lon_text, min_lat_text, max_lat_text):
+                        bbox = {
+                            "min_lon": float(min_lon_text),
+                            "max_lon": float(max_lon_text),
+                            "min_lat": float(min_lat_text),
+                            "max_lat": float(max_lat_text),
+                        }
+                    loaded_mask_path = _resolve_bundled_resource(cwd, _xml_find_text(xml_root, "crop_mask_path", "") or "")
+                    _set_crop_selection({
+                        "bbox": bbox,
+                        "mask_path": loaded_mask_path,
+                        "source_path": loaded_images[0] if loaded_images else _xml_find_text(xml_root, "crop_source_image", ""),
+                    })
+                except Exception:
                     clear_crop_selection()
-            except Exception:
+            else:
                 clear_crop_selection()
-        else:
-            clear_crop_selection()
+        finally:
+            io_change_state["suspend_tracking"] = False
+            io_change_state["modified_since_load"] = False
 
         above_rrs_flag.set(_parse_bool_text(_xml_find_text(xml_root, "rrs_flag"), above_rrs_flag.get()))
         shallow_flag.set(_parse_bool_text(_xml_find_text(xml_root, "shallow"), shallow_flag.get()))
@@ -2916,13 +4100,15 @@ def gui():
         update_initial_guess_controls()
         update_false_deep_correction_controls()
 
-        messagebox.showinfo(
-            "Settings loaded",
-            "Run settings were loaded from the selected log XML.\n\n"
-            "The input image(s), output folder, and processing options were restored from that run. "
-            "You can still change the input image or output folder before starting a new run.",
-            parent=root,
-        )
+        if show_overwrite_warning:
+            messagebox.showwarning(
+                "Settings loaded",
+                "Run settings were loaded from the selected log XML.\n\n"
+                "The input image(s) and processing extent were modified to match the loaded XML. "
+                "The output folder and processing options were also restored from that run.\n\n"
+                "If you want to apply these settings to another scene, change the input image and crop or mask before starting a new run.",
+                parent=root,
+            )
 
     fmt_frame = ttk.Labelframe(input_tab, text="Output Format")
     fmt_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
@@ -2951,28 +4137,6 @@ def gui():
         except Exception as exc:
             messagebox.showerror("Invalid sensor setup", str(exc))
             return
-
-        if crop_selection:
-            try:
-                current_files = _current_input_file_list()
-                for path in current_files:
-                    _preview_band, preview_info = _load_preview_band_from_netcdf(path)
-                    if (
-                        int(preview_info["height"]) != int(crop_selection["source_height"])
-                        or int(preview_info["width"]) != int(crop_selection["source_width"])
-                    ):
-                        raise ValueError(
-                            f"The selected crop was created for an image of size "
-                            f"{crop_selection['source_height']} x {crop_selection['source_width']} px, "
-                            f"but '{os.path.basename(path)}' is "
-                            f"{preview_info['height']} x {preview_info['width']} px."
-                        )
-            except Exception as exc:
-                messagebox.showerror(
-                    "Invalid crop selection",
-                    f"The current crop area cannot be applied to the selected image set.\n\n{exc}",
-                )
-                return
 
         root.destroy()
 
@@ -3042,17 +4206,17 @@ def gui():
     siop_config.write_siop_xml(file_iop, compiled_siop)
     file_sensor = os.path.join(run_dir, "generated_sensor_filter.xml")
     sensor_config.write_sensor_xml(file_sensor, compiled_sensor)
+    sensor_log_payload = sensor_config.build_log_payload(compiled_sensor)
 
     input_dict = {
         "image": file_list[0] if file_list else "",
         "images": list(file_list),
         "crop_enabled": bool(crop_selection),
-        "crop_row_start": int(crop_selection["row_start"]) if crop_selection else 0,
-        "crop_row_end": int(crop_selection["row_end"]) if crop_selection else 0,
-        "crop_col_start": int(crop_selection["col_start"]) if crop_selection else 0,
-        "crop_col_end": int(crop_selection["col_end"]) if crop_selection else 0,
-        "crop_source_height": int(crop_selection["source_height"]) if crop_selection else 0,
-        "crop_source_width": int(crop_selection["source_width"]) if crop_selection else 0,
+        "crop_min_lon": float(crop_selection["bbox"]["min_lon"]) if crop_selection and crop_selection.get("bbox") else "",
+        "crop_max_lon": float(crop_selection["bbox"]["max_lon"]) if crop_selection and crop_selection.get("bbox") else "",
+        "crop_min_lat": float(crop_selection["bbox"]["min_lat"]) if crop_selection and crop_selection.get("bbox") else "",
+        "crop_max_lat": float(crop_selection["bbox"]["max_lat"]) if crop_selection and crop_selection.get("bbox") else "",
+        "crop_mask_path": str(crop_selection.get("mask_path", "")) if crop_selection else "",
         "crop_source_image": str(crop_selection.get("source_path", "")) if crop_selection else "",
         "SIOPS": file_iop,
         "sensor_filter": file_sensor,
@@ -3091,8 +4255,11 @@ def gui():
         "allow_split": allow_split.get(),
         "split_chunk_rows": chunk_rows.get().strip(),
         "siop_popup": siop_config.build_log_payload(compiled_siop, template_config, spectral_library),
-        "sensor_popup": sensor_config.build_log_payload(compiled_sensor),
+        "sensor_popup": sensor_log_payload,
     }
+    for mapping_key, mapping_value in sensor_log_payload.items():
+        if mapping_key.startswith("sensor_band_mapping_"):
+            input_dict[mapping_key] = mapping_value
 
     bathy_path = ""
     if bathy_mode.get() == "input":

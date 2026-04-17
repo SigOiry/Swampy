@@ -9,7 +9,9 @@ dependencies:
   - pandas
   - netcdf4
   - rasterio
+  - fiona
   - spectral
+  - pillow
   - dicttoxml
   - xmltodict
   - future
@@ -17,8 +19,9 @@ dependencies:
   - tqdm
   - numba
   - tk  # tkinter for the GUI
-  - matplotlib
   - pip
+  - pip:
+      - pywebview
   # Optional: if you hit proj/gdal conflicts on Windows, try pinning
   # - gdal
   # - proj

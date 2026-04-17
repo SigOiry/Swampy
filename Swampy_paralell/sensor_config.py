@@ -179,7 +179,7 @@ def select_bands_by_range(template, min_wavelength=None, max_wavelength=None, st
     return filtered[::step]
 
 
-def build_sensor_config(template, selected_band_indices):
+def build_sensor_config(template, selected_band_indices, band_mapping=None):
     wanted = []
     seen = set()
     for index in selected_band_indices:
@@ -192,13 +192,16 @@ def build_sensor_config(template, selected_band_indices):
     if len(selected_bands) < 4:
         raise ValueError("Select at least four bands.")
 
-    return {
+    config = {
         "sensor_name": template["sensor_name"],
         "template_path": template["template_path"],
         "wavelengths": list(template["wavelengths"]),
         "bands": selected_bands,
         "selected_indices": wanted,
     }
+    if band_mapping:
+        config["band_mapping"] = dict(band_mapping)
+    return config
 
 
 def write_sensor_xml(output_path, sensor_config):
@@ -235,12 +238,32 @@ def write_sensor_xml(output_path, sensor_config):
 
 
 def build_log_payload(sensor_config):
-    return {
+    payload = {
         "sensor_name": sensor_config["sensor_name"],
         "sensor_template_source": sensor_config["template_path"],
         "selected_band_centers": [band["center"] for band in sensor_config["bands"]],
         "selected_band_count": len(sensor_config["bands"]),
     }
+    band_mapping = sensor_config.get("band_mapping") or {}
+    image_band_indices = band_mapping.get("image_band_indices") or []
+    if image_band_indices:
+        payload.update({
+            "sensor_band_mapping_enabled": True,
+            "sensor_band_mapping_mode": band_mapping.get("mode", "manual"),
+            "sensor_band_mapping_tolerance_nm": band_mapping.get("tolerance_nm", 10.0),
+            "sensor_band_mapping_source_kind": band_mapping.get("source_kind", ""),
+            "sensor_band_mapping_source_name": band_mapping.get("source_name", ""),
+            "sensor_band_mapping_source_band_labels": list(band_mapping.get("source_band_labels") or []),
+            "sensor_band_mapping_source_band_wavelengths": list(band_mapping.get("source_band_wavelengths") or []),
+            "sensor_band_mapping_sensor_band_indices": list(band_mapping.get("sensor_band_indices") or []),
+            "sensor_band_mapping_sensor_band_centers": list(band_mapping.get("sensor_band_centers") or []),
+            "sensor_band_mapping_image_band_indices": list(image_band_indices),
+            "sensor_band_mapping_image_band_labels": list(band_mapping.get("image_band_labels") or []),
+            "sensor_band_mapping_image_band_wavelengths": list(band_mapping.get("image_band_wavelengths") or []),
+        })
+    else:
+        payload["sensor_band_mapping_enabled"] = False
+    return payload
 
 
 def _format_value(value):

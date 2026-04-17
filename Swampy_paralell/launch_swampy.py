@@ -334,60 +334,247 @@ def _parse_chunk_rows(value):
 
 
 def _parse_crop_selection(config_root):
-    """Return a validated crop dict from XML/log settings, or None for full-scene processing."""
+    """Return a validated spatial-selection dict from XML/log settings, or None."""
     if not config_root or not _coerce_bool(config_root.get('crop_enabled', False), False):
         return None
-    crop = {
-        'row_start': _coerce_int(config_root.get('crop_row_start'), 0),
-        'row_end': _coerce_int(config_root.get('crop_row_end'), 0),
-        'col_start': _coerce_int(config_root.get('crop_col_start'), 0),
-        'col_end': _coerce_int(config_root.get('crop_col_end'), 0),
-        'source_height': _coerce_int(config_root.get('crop_source_height'), 0),
-        'source_width': _coerce_int(config_root.get('crop_source_width'), 0),
-    }
-    if crop['row_end'] <= crop['row_start'] or crop['col_end'] <= crop['col_start']:
+    bbox = None
+    lon_values = [config_root.get('crop_min_lon'), config_root.get('crop_max_lon')]
+    lat_values = [config_root.get('crop_min_lat'), config_root.get('crop_max_lat')]
+    if all(value not in (None, '') for value in lon_values + lat_values):
+        min_lon = _coerce_float(config_root.get('crop_min_lon'), np.nan)
+        max_lon = _coerce_float(config_root.get('crop_max_lon'), np.nan)
+        min_lat = _coerce_float(config_root.get('crop_min_lat'), np.nan)
+        max_lat = _coerce_float(config_root.get('crop_max_lat'), np.nan)
+        if np.isfinite(min_lon) and np.isfinite(max_lon) and np.isfinite(min_lat) and np.isfinite(max_lat):
+            min_lon, max_lon = sorted((min_lon, max_lon))
+            min_lat, max_lat = sorted((min_lat, max_lat))
+            if max_lon > min_lon and max_lat > min_lat:
+                bbox = {
+                    'min_lon': min_lon,
+                    'max_lon': max_lon,
+                    'min_lat': min_lat,
+                    'max_lat': max_lat,
+                }
+    mask_path = _resolve_bundled_resource(config_root.get('crop_mask_path'))
+    if not bbox and not mask_path:
         return None
-    return crop
+    return {
+        'bbox': bbox,
+        'mask_path': mask_path,
+    }
+
+
+def _dict_item_list(node, key):
+    if not isinstance(node, dict):
+        return []
+    value = node.get(key)
+    if value is None:
+        return []
+    if isinstance(value, dict) and 'item' in value:
+        value = value.get('item')
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _parse_saved_sensor_band_mapping(config_root):
+    if not isinstance(config_root, dict):
+        return None
+    if not _coerce_bool(config_root.get('sensor_band_mapping_enabled', False), False):
+        return None
+
+    source_band_labels = [str(value) for value in _dict_item_list(config_root, 'sensor_band_mapping_source_band_labels')]
+    source_band_wavelengths_raw = _dict_item_list(config_root, 'sensor_band_mapping_source_band_wavelengths')
+    sensor_band_indices_raw = _dict_item_list(config_root, 'sensor_band_mapping_sensor_band_indices')
+    sensor_band_centers_raw = _dict_item_list(config_root, 'sensor_band_mapping_sensor_band_centers')
+    image_band_indices_raw = _dict_item_list(config_root, 'sensor_band_mapping_image_band_indices')
+    image_band_labels = [str(value) for value in _dict_item_list(config_root, 'sensor_band_mapping_image_band_labels')]
+    image_band_wavelengths_raw = _dict_item_list(config_root, 'sensor_band_mapping_image_band_wavelengths')
+
+    if not sensor_band_indices_raw or not image_band_indices_raw:
+        return None
+
+    def _parse_optional_float_list(values):
+        parsed = []
+        for value in values:
+            text = str(value).strip().lower()
+            if text in {'', 'none', 'nan'}:
+                parsed.append(None)
+            else:
+                parsed.append(float(value))
+        return parsed
+
+    try:
+        return {
+            'mode': str(config_root.get('sensor_band_mapping_mode', 'manual') or 'manual'),
+            'tolerance_nm': _coerce_float(config_root.get('sensor_band_mapping_tolerance_nm'), 10.0),
+            'source_kind': str(config_root.get('sensor_band_mapping_source_kind', '') or ''),
+            'source_name': str(config_root.get('sensor_band_mapping_source_name', '') or ''),
+            'source_band_labels': source_band_labels,
+            'source_band_wavelengths': _parse_optional_float_list(source_band_wavelengths_raw),
+            'sensor_band_indices': [int(float(value)) for value in sensor_band_indices_raw],
+            'sensor_band_centers': [float(value) for value in sensor_band_centers_raw],
+            'image_band_indices': [int(float(value)) for value in image_band_indices_raw],
+            'image_band_labels': image_band_labels,
+            'image_band_wavelengths': _parse_optional_float_list(image_band_wavelengths_raw),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_runtime_band_labels(single_band_layers, band_count, wavelengths=None):
+    labels = []
+    if single_band_layers:
+        for layer in single_band_layers:
+            wave = layer.get('wavelength')
+            if wave is None:
+                labels.append(str(layer['name']))
+            else:
+                labels.append(f"{layer['name']} ({float(wave):.1f} nm)")
+        return labels
+
+    wavelength_values = list(wavelengths) if wavelengths is not None else []
+    for band_index in range(int(band_count)):
+        wave = wavelength_values[band_index] if band_index < len(wavelength_values) else None
+        if wave is None:
+            labels.append(f"Band {band_index + 1}")
+        else:
+            labels.append(
+                f"Band {band_index + 1} ({int(round(float(wave)))} nm)"
+                if float(wave).is_integer()
+                else f"Band {band_index + 1} ({float(wave):.1f} nm)"
+            )
+    return labels
+
+
+def _saved_mapping_matches_current_source(saved_mapping, current_band_labels, current_band_wavelengths):
+    if not saved_mapping:
+        return False
+    saved_labels = list(saved_mapping.get('source_band_labels') or [])
+    if saved_labels and list(current_band_labels or []) == saved_labels:
+        return True
+
+    saved_wavelengths = np.array([
+        np.nan if value is None else float(value)
+        for value in (saved_mapping.get('source_band_wavelengths') or [])
+    ], dtype=float)
+    current_wavelengths = np.array([
+        np.nan if value is None else float(value)
+        for value in (current_band_wavelengths or [])
+    ], dtype=float)
+    if saved_wavelengths.size and current_wavelengths.size and saved_wavelengths.size == current_wavelengths.size:
+        valid = np.isfinite(saved_wavelengths) & np.isfinite(current_wavelengths)
+        if np.any(valid) and np.array_equal(np.isnan(saved_wavelengths), np.isnan(current_wavelengths)):
+            return np.allclose(saved_wavelengths[valid], current_wavelengths[valid], atol=0.5)
+    return False
+
+
+def _apply_saved_sensor_band_mapping(rrs, saved_mapping, current_band_labels, current_band_wavelengths, target_band_centers):
+    if not saved_mapping:
+        return None, None
+    sensor_centers = np.asarray(saved_mapping.get('sensor_band_centers') or [], dtype='float32')
+    image_band_indices = [int(value) for value in (saved_mapping.get('image_band_indices') or [])]
+    if sensor_centers.size == 0 or not image_band_indices:
+        return None, None
+    target_centers = np.asarray(target_band_centers, dtype='float32')
+    if target_centers.size != sensor_centers.size or not np.allclose(target_centers, sensor_centers, atol=0.5):
+        print("[WARN]: Saved sensor band mapping does not match the selected sensor bands. Falling back to automatic alignment.")
+        return None, None
+    if not _saved_mapping_matches_current_source(saved_mapping, current_band_labels, current_band_wavelengths):
+        print("[WARN]: Saved sensor band mapping does not match the current input image bands. Falling back to automatic alignment.")
+        return None, None
+    if len(set(image_band_indices)) != len(image_band_indices):
+        print("[WARN]: Saved sensor band mapping contains duplicate input band indices. Falling back to automatic alignment.")
+        return None, None
+    if any(index < 0 or index >= rrs.shape[0] for index in image_band_indices):
+        print("[WARN]: Saved sensor band mapping references input bands that are not present in the current image. Falling back to automatic alignment.")
+        return None, None
+    aligned = rrs[image_band_indices, :, :]
+    return aligned, sensor_centers
 
 
 def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im):
-    """Apply a row/column crop to reflectance and geolocation arrays."""
+    """Apply geographic crop and optional shapefile mask to reflectance and coordinates."""
     if not crop_selection:
         return rrs, lat_array, lon_array
 
-    height = int(rrs.shape[1])
-    width = int(rrs.shape[2])
-    source_height = int(crop_selection.get('source_height') or 0)
-    source_width = int(crop_selection.get('source_width') or 0)
-    if source_height and source_width and (height != source_height or width != source_width):
-        raise RuntimeError(
-            f"Saved crop expects a scene of {source_height}x{source_width} pixels, "
-            f"but '{os.path.basename(file_im)}' is {height}x{width}."
+    if lat_array is None or lon_array is None:
+        raise RuntimeError("Spatial cropping requires latitude and longitude coordinates in the input image.")
+
+    lat_grid = np.asarray(lat_array, dtype='float32')
+    lon_grid = np.asarray(lon_array, dtype='float32')
+    if lat_grid.ndim == 1 and lon_grid.ndim == 1:
+        lon_grid, lat_grid = np.meshgrid(lon_grid, lat_grid)
+    if lat_grid.ndim != 2 or lon_grid.ndim != 2:
+        raise RuntimeError("Spatial cropping requires 2D latitude/longitude grids.")
+
+    cropped_rrs = np.array(rrs, dtype='float32', copy=True)
+    cropped_lat = lat_grid
+    cropped_lon = lon_grid
+    selection_mask = np.isfinite(cropped_lat) & np.isfinite(cropped_lon)
+
+    bbox = crop_selection.get('bbox')
+    if bbox:
+        bbox_mask = (
+            selection_mask
+            & (cropped_lon >= float(bbox['min_lon']))
+            & (cropped_lon <= float(bbox['max_lon']))
+            & (cropped_lat >= float(bbox['min_lat']))
+            & (cropped_lat <= float(bbox['max_lat']))
         )
+        if not np.any(bbox_mask):
+            raise RuntimeError(
+                f"The saved geographic crop does not overlap '{os.path.basename(file_im)}'."
+            )
+        rows, cols = np.where(bbox_mask)
+        row_start, row_end = int(rows.min()), int(rows.max()) + 1
+        col_start, col_end = int(cols.min()), int(cols.max()) + 1
+        cropped_rrs = cropped_rrs[:, row_start:row_end, col_start:col_end]
+        cropped_lat = cropped_lat[row_start:row_end, col_start:col_end]
+        cropped_lon = cropped_lon[row_start:row_end, col_start:col_end]
+        selection_mask = bbox_mask[row_start:row_end, col_start:col_end]
 
-    row_start = max(0, min(height, int(crop_selection['row_start'])))
-    row_end = max(0, min(height, int(crop_selection['row_end'])))
-    col_start = max(0, min(width, int(crop_selection['col_start'])))
-    col_end = max(0, min(width, int(crop_selection['col_end'])))
-    if row_end <= row_start or col_end <= col_start:
-        raise RuntimeError("Crop bounds are empty after clamping to the current scene extent.")
+    mask_path = str(crop_selection.get('mask_path') or '').strip()
+    if mask_path:
+        if not os.path.isfile(mask_path):
+            raise RuntimeError(f"Shapefile mask not found: {mask_path}")
+        import fiona
+        from rasterio.features import geometry_mask
+        from rasterio.warp import transform_geom
 
-    cropped_rrs = rrs[:, row_start:row_end, col_start:col_end]
+        transform, crs = _derive_transform_crs(
+            int(cropped_rrs.shape[2]),
+            int(cropped_rrs.shape[1]),
+            cropped_lat,
+            cropped_lon,
+            2,
+        )
+        geometries = []
+        with fiona.open(mask_path, 'r') as src:
+            src_crs = src.crs_wkt or src.crs
+            if not src_crs:
+                raise RuntimeError("The shapefile mask has no CRS information.")
+            for feature in src:
+                geometry = feature.get('geometry')
+                if not geometry:
+                    continue
+                geometries.append(transform_geom(src_crs, crs.to_string(), geometry, precision=8))
+        if not geometries:
+            raise RuntimeError("The shapefile mask does not contain any valid geometry.")
+        shape_mask = geometry_mask(
+            geometries,
+            out_shape=(int(cropped_rrs.shape[1]), int(cropped_rrs.shape[2])),
+            transform=transform,
+            invert=True,
+        )
+        selection_mask &= shape_mask
+        if not np.any(selection_mask):
+            raise RuntimeError(
+                f"The shapefile mask does not overlap '{os.path.basename(file_im)}'."
+            )
 
-    def _crop_spatial_array(arr):
-        if arr is None:
-            return None
-        arr = np.asarray(arr)
-        if arr.ndim == 2:
-            return arr[row_start:row_end, col_start:col_end]
-        if arr.ndim == 1:
-            if arr.shape[0] == height:
-                return arr[row_start:row_end]
-            if arr.shape[0] == width:
-                return arr[col_start:col_end]
-        return arr
-
-    return cropped_rrs, _crop_spatial_array(lat_array), _crop_spatial_array(lon_array)
+    cropped_rrs[:, ~selection_mask] = np.nan
+    return cropped_rrs, cropped_lat, cropped_lon
 
 
 def _suggest_chunk_rows(height, width, target_pixels=_SPLIT_TARGET_PIXELS, min_rows=_SPLIT_MIN_ROWS):
@@ -2717,6 +2904,7 @@ if __name__ == "__main__":
         fully_relaxed = False
         output_modeled_reflectance = False
         crop_selection = None
+        saved_sensor_band_mapping = None
         false_deep_correction_settings = dict(DEFAULT_FALSE_DEEP_CORRECTION_SETTINGS)
         if args.path:
             # the xml file has been provided, so let's read the inputs from the xml file
@@ -2739,6 +2927,7 @@ if __name__ == "__main__":
             fully_relaxed = _coerce_bool(root.get('fully_relaxed', False))
             output_modeled_reflectance = _coerce_bool(root.get('output_modeled_reflectance', False))
             crop_selection = _parse_crop_selection(root)
+            saved_sensor_band_mapping = _parse_saved_sensor_band_mapping(root)
             false_deep_correction_settings = _normalise_false_deep_correction_settings({
                 'enabled': root.get('false_deep_correction_enabled', False),
                 'anchor_min_sdi': root.get('false_deep_anchor_min_sdi'),
@@ -2794,6 +2983,7 @@ if __name__ == "__main__":
             bathy_tolerance_m = _coerce_float(xml_dict.get('bathy_tolerance_m'), 0.0)
             nedr_mode = str(xml_dict.get('nedr_mode', 'fixed')).strip().lower()
             crop_selection = _parse_crop_selection(xml_dict)
+            saved_sensor_band_mapping = _parse_saved_sensor_band_mapping(xml_dict)
 
         if fully_relaxed and not relaxed:
             print("[WARN]: Fully relaxed substrate mode requires relaxed constraints. Disabling fully relaxed mode.")
@@ -2874,6 +3064,7 @@ if __name__ == "__main__":
             wls = None
             name_w = None
             rrs_band_wavelengths = []
+            rrs_band_labels = []
             name_lat = None
             name_lon = None
             sensor_xml_path = file_sensor  # the sensor filter file
@@ -3023,6 +3214,25 @@ if __name__ == "__main__":
                 except Exception:
                     wls = None
 
+            rrs_band_labels = _build_runtime_band_labels(single_band_layers, nbands, rrs_band_wavelengths)
+
+            if band_names and saved_sensor_band_mapping is not None:
+                mapped_rrs, mapped_wls = _apply_saved_sensor_band_mapping(
+                    rrs,
+                    saved_sensor_band_mapping,
+                    rrs_band_labels,
+                    rrs_band_wavelengths,
+                    band_names,
+                )
+                if mapped_rrs is not None:
+                    print(f"[INFO]: Applying explicit input-to-sensor band mapping for {mapped_rrs.shape[0]} band(s).")
+                    rrs = mapped_rrs
+                    nbands = rrs.shape[0]
+                    rrs_band_wavelengths = mapped_wls.tolist()
+                    wls = mapped_wls
+                    name_w = name_w or 'wavelength'
+                    rrs_band_labels = list(saved_sensor_band_mapping.get('image_band_labels') or rrs_band_labels)
+
             if band_names and nbands is not None and len(band_names) != nbands:
                 print(f"[INFO]: Aligning observed RRS ({nbands} bands) to sensor filter ({len(band_names)} bands).")
                 rrs, selected_wls = _align_rrs_to_filter(rrs, rrs_band_wavelengths, band_names)
@@ -3098,10 +3308,17 @@ if __name__ == "__main__":
                 width = int(rrs.shape[2])
                 lat_grid = lat_array
                 lon_grid = lon_array
-                print(
-                    f"[INFO]: Applying crop to rows {crop_selection['row_start']}:{crop_selection['row_end']} "
-                    f"and cols {crop_selection['col_start']}:{crop_selection['col_end']}."
-                )
+                message_parts = []
+                bbox = crop_selection.get('bbox')
+                if bbox:
+                    message_parts.append(
+                        f"lon {bbox['min_lon']:.5f}:{bbox['max_lon']:.5f}, "
+                        f"lat {bbox['min_lat']:.5f}:{bbox['max_lat']:.5f}"
+                    )
+                mask_path = str(crop_selection.get('mask_path') or '').strip()
+                if mask_path:
+                    message_parts.append(f"mask {os.path.basename(mask_path)}")
+                print(f"[INFO]: Applying spatial selection ({'; '.join(message_parts)}).")
 
             legacy_lat = lat_grid.copy() if rotated_input_mode and lat_grid is not None else None
             legacy_lon = lon_grid.copy() if rotated_input_mode and lon_grid is not None else None
