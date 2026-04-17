@@ -1,5 +1,5 @@
 ---
-title: "SWISS: Shallow-Water Inversion for Satellite Sensors"
+title: "SWIPES: Shallow-Water Inversion and Parameter Estimation from Satellite Sensors"
 shorttitle: To be written
 author:
   - name: Simon Oiry
@@ -55,3 +55,6 @@ csl: RSE.csl
 ---
 
 I changed the name of the workflow because SWAMPy already taken... Its QGIS plugin that allow the user to build groundwater models. See [Here](https://github.com/dzamrsky/SWAMPy-tools) 
+
+Otherwise: 
+SWISS: Shallow-Water Inversion from Satellite Sensors
