@@ -1,0 +1,303 @@
+{
+  "quarto": {
+    "version": "1.9.37"
+  },
+  "dir": "C:\\Users\\Simon\\Nextcloud\\GIT\\Swampy\\Paper",
+  "engines": [
+    "markdown"
+  ],
+  "config": {
+    "project": {
+      "type": "manuscript",
+      "output-dir": "../docs",
+      "post-render": [
+        "python postprocess_docx_affiliations.py"
+      ],
+      "lib-dir": "site_libs",
+      "render": [
+        "index.qmd"
+      ]
+    },
+    "manuscript": {
+      "article": "index.qmd",
+      "notebooks": [],
+      "mecaFile": "index-meca.zip"
+    },
+    "format": {
+      "html": {
+        "toc": true,
+        "theme": "cosmo"
+      },
+      "docx": {
+        "output-file": "SWAMPy_Paper",
+        "reference-doc": "quarto_template.docx"
+      }
+    },
+    "render": [
+      "index.qmd"
+    ],
+    "resources": [
+      "!*.qmd",
+      "!*.ipynb",
+      "!*.out.ipynb",
+      "!*.embed.ipynb"
+    ],
+    "bibliography": "library.bib",
+    "engines": [
+      {
+        "path": "C:\\Users\\Simon\\AppData\\Local\\Programs\\Quarto\\share\\extension-subtrees\\julia-engine\\_extensions\\julia-engine\\julia-engine.js"
+      }
+    ],
+    "language": {},
+    "quarto-internal": {
+      "subarticles": []
+    },
+    "echo": false,
+    "warning": false,
+    "notebook-preview-options": {
+      "back": true
+    },
+    "theme": "cosmo",
+    "title-block-style": "manuscript",
+    "lightbox": "auto"
+  },
+  "files": {
+    "input": [
+      "C:\\Users\\Simon\\Nextcloud\\GIT\\Swampy\\Paper\\index.qmd"
+    ],
+    "resources": [],
+    "config": [
+      "C:\\Users\\Simon\\Nextcloud\\GIT\\Swampy\\Paper\\_quarto.yml"
+    ],
+    "configResources": [
+      "C:\\Users\\Simon\\Nextcloud\\GIT\\Swampy\\Paper\\index.qmd",
+      "C:\\Users\\Simon\\Nextcloud\\GIT\\Swampy\\Paper\\quarto_template.docx",
+      "C:\\Users\\Simon\\Nextcloud\\GIT\\Swampy\\Paper\\index.qmd",
+      "C:\\Users\\Simon\\Nextcloud\\GIT\\Swampy\\Paper\\library.bib",
+      "C:\\Users\\Simon\\AppData\\Local\\Programs\\Quarto\\share\\extension-subtrees\\julia-engine\\_extensions\\julia-engine\\julia-engine.js"
+    ]
+  },
+  "fileInformation": {
+    "index.qmd": {
+      "includeMap": [],
+      "codeCells": [],
+      "metadata": {
+        "title": "Heatwave impacts on intertidal seagrass reflectance: from laboratory experiment to satellite mapping of seagrass heat shock index",
+        "shorttitle": "Effect of heatwaves on seagrasses",
+        "author": [
+          {
+            "name": "Simon Oiry",
+            "orcid": "0000-0001-7161-5246",
+            "corresponding": true,
+            "email": "oirysimon@gmail.com",
+            "roles": [
+              "Investigation",
+              "Writing",
+              "Data acquisition"
+            ],
+            "affiliations": [
+              "Institut des Substances et Organismes de la Mer, ISOMer, Nantes Université, UR 2160, F-44000 Nantes, France",
+              "Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 34149 Trieste, Italy"
+            ]
+          },
+          {
+            "name": "Maria Laura Zoffoli",
+            "orcid": "0000-0003-1892-0051",
+            "corresponding": false,
+            "roles": [
+              "Data acquisition",
+              "Revision"
+            ],
+            "affiliations": [
+              "Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 34149 Trieste, Italy"
+            ]
+          },
+          {
+            "name": "Vittorio Brando",
+            "orcid": "0000-0003-1892-0051",
+            "corresponding": false,
+            "roles": [
+              "Data acquisition",
+              "Revision"
+            ],
+            "affiliations": [
+              "Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 00133 Rome, Italy"
+            ]
+          }
+        ],
+        "keywords": [
+          "To be written"
+        ],
+        "abstract": "-",
+        "plain-language-summary": "To be written\n",
+        "key-points": [
+          "To be written"
+        ],
+        "date": "last-modified",
+        "citation": {
+          "container-title": "Environmental Modelling & Software"
+        },
+        "number-sections": true,
+        "notebook-links": false,
+        "editor_options": {
+          "chunk_output_type": "console"
+        },
+        "csl": "RSE.csl"
+      }
+    }
+  },
+  "extensions": [
+    {
+      "title": "Quarto Julia Engine Extension",
+      "version": {
+        "raw": "0.1.0",
+        "loose": false,
+        "options": {
+          "loose": false,
+          "includePrerelease": false
+        },
+        "major": 0,
+        "minor": 1,
+        "patch": 0,
+        "version": "0.1.0",
+        "build": [],
+        "prerelease": []
+      },
+      "quartoVersion": {
+        "range": ">=1.9.0",
+        "raw": ">=1.9.0",
+        "loose": false,
+        "options": {
+          "loose": false,
+          "includePrerelease": false
+        },
+        "includePrerelease": false,
+        "set": [
+          [
+            {
+              "semver": {
+                "raw": "1.9.0",
+                "loose": false,
+                "options": {
+                  "loose": false,
+                  "includePrerelease": false
+                },
+                "major": 1,
+                "minor": 9,
+                "patch": 0,
+                "version": "1.9.0",
+                "build": [],
+                "prerelease": []
+              },
+              "operator": ">=",
+              "value": ">=1.9.0",
+              "loose": false,
+              "options": {
+                "loose": false,
+                "includePrerelease": false
+              }
+            }
+          ]
+        ]
+      },
+      "id": {
+        "name": "julia-engine"
+      },
+      "path": "C:\\Users\\Simon\\AppData\\Local\\Programs\\Quarto\\share\\extension-subtrees\\julia-engine\\_extensions\\julia-engine",
+      "contributes": {
+        "shortcodes": [],
+        "filters": [],
+        "formats": {},
+        "project": {},
+        "revealjs-plugins": [],
+        "engines": [
+          {
+            "path": "C:\\Users\\Simon\\AppData\\Local\\Programs\\Quarto\\share\\extension-subtrees\\julia-engine\\_extensions\\julia-engine\\julia-engine.js"
+          }
+        ]
+      }
+    },
+    {
+      "title": "Typst Orange Book Format",
+      "author": "Quarto",
+      "version": {
+        "raw": "0.1.0",
+        "loose": false,
+        "options": {
+          "loose": false,
+          "includePrerelease": false
+        },
+        "major": 0,
+        "minor": 1,
+        "patch": 0,
+        "version": "0.1.0",
+        "build": [],
+        "prerelease": []
+      },
+      "quartoVersion": {
+        "range": ">=1.9.17",
+        "raw": ">=1.9.17",
+        "loose": false,
+        "options": {
+          "loose": false,
+          "includePrerelease": false
+        },
+        "includePrerelease": false,
+        "set": [
+          [
+            {
+              "semver": {
+                "raw": "1.9.17",
+                "loose": false,
+                "options": {
+                  "loose": false,
+                  "includePrerelease": false
+                },
+                "major": 1,
+                "minor": 9,
+                "patch": 17,
+                "version": "1.9.17",
+                "build": [],
+                "prerelease": []
+              },
+              "operator": ">=",
+              "value": ">=1.9.17",
+              "loose": false,
+              "options": {
+                "loose": false,
+                "includePrerelease": false
+              }
+            }
+          ]
+        ]
+      },
+      "id": {
+        "name": "orange-book"
+      },
+      "path": "C:\\Users\\Simon\\AppData\\Local\\Programs\\Quarto\\share\\extension-subtrees\\orange-book\\_extensions\\orange-book",
+      "contributes": {
+        "shortcodes": [],
+        "filters": [],
+        "formats": {
+          "typst": {
+            "template-partials": [
+              "../../../../AppData/Local/Programs/Quarto/share/extension-subtrees/orange-book/_extensions/orange-book/numbering.typ",
+              "../../../../AppData/Local/Programs/Quarto/share/extension-subtrees/orange-book/_extensions/orange-book/page.typ",
+              "../../../../AppData/Local/Programs/Quarto/share/extension-subtrees/orange-book/_extensions/orange-book/typst-show.typ"
+            ],
+            "filters": [
+              {
+                "path": "C:\\Users\\Simon\\AppData\\Local\\Programs\\Quarto\\share\\extension-subtrees\\orange-book\\_extensions\\orange-book\\orange-book.lua",
+                "at": "post-quarto"
+              }
+            ],
+            "shortcodes": [],
+            "revealjs-plugins": []
+          }
+        },
+        "project": {},
+        "revealjs-plugins": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.37">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Simon Oiry">
+<meta name="author" content="Maria Laura Zoffoli">
+<meta name="author" content="Giuliana Profeti">
+<meta name="author" content="Vittorio Brando">
+<meta name="dcterms.date" content="2026-04-17">
+<meta name="keywords" content="To be written">
+
+<title>SWISS: Shallow-Water Inversion for Satellite Sensors</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-7f8f88aac4f3542376d5c11b86a4c14d.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-67270d1595a62d14f123c043d4fb2f18.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+<meta name="citation_title" content="SWISS: Shallow-Water Inversion for Satellite Sensors">
+<meta name="citation_abstract" content="-">
+<meta name="citation_keywords" content="To be written">
+<meta name="citation_author" content="Simon Oiry">
+<meta name="citation_author" content="Maria Laura Zoffoli">
+<meta name="citation_author" content="Giuliana Profeti">
+<meta name="citation_author" content="Vittorio Brando">
+<meta name="citation_publication_date" content="2026-04-17">
+<meta name="citation_cover_date" content="2026-04-17">
+<meta name="citation_year" content="2026">
+<meta name="citation_online_date" content="2026-04-17">
+<meta name="citation_language" content="en">
+<meta name="citation_journal_title" content="Environmental Modelling &amp;amp; Software">
+<meta name="citation_reference" content="citation_title=High risk water pollution hazards affecting aveiro coastal lagoon (portugal)–a habitat risk assessment using InVEST;,citation_author=MI Bastos;,citation_author=PC Roebeling;,citation_author=Fatima Lopes Alves;,citation_author=S Villasante;,citation_author=L Magalhães Filho;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_volume=76;,citation_journal_title=Ecological Informatics;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Temperature drives seagrass recovery across the western north atlantic;,citation_author=Fee OH Smulders;,citation_author=Justin E Campbell;,citation_author=Andrew H Altieri;,citation_author=Anna R Armitage;,citation_author=Elisabeth S Bakker;,citation_author=Savanna C Barry;,citation_author=S Tatiana Becker;,citation_author=Enrique Bethel;,citation_author=James G Douglass;,citation_author=Hannah J Duijnhoven;,citation_author=others;,citation_publication_date=2025;,citation_cover_date=2025;,citation_year=2025;,citation_issue=4;,citation_volume=31;,citation_journal_title=Global change biology;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Spatiotemporal index standardization improves the stock assessment of northern shrimp in the gulf of maine;,citation_abstract=&amp;amp;amp;lt;p&amp;gt;Estimated trends in relative stock abundance are a primary input to fish stock assessments. Accurate and precise estimates are essential for successful conservation and management. Scientifically designed data collection ensures that estimates of relative abundance are unbiased. However, the statistical efficiency of a design-based estimator may be low under certain circumstances. We apply a recently developed spatiotemporal model that incorporates habitat variables to estimate a model-based abundance index for northern shrimp (Pandalus borealis) in the Gulf of Maine. We contrast this spatiotemporal index with a classical design-based index and evaluate the impacts of differences between the two abundance indices on the stock assessment. We show that using the spatiotemporal index in the assessment model greatly alters the estimates of recruitment and spawning stock biomass and the determination of stock status. Also, incorporating the spatiotemporal index leads to less retrospective bias and outperforms the model with design-based index in terms of predictive performance through a retrospective cross-validation test. Our results suggest that temporal variability of population abundance could be exaggerated by the design-based estimator, and such imprecision may greatly affect the performance of a stock assessment and subsequent development of management decisions.&amp;lt;/p&amp;gt;;,citation_author=Jie Cao;,citation_author=James T. Thorson;,citation_author=R. Anne Richards;,citation_author=Yong Chen;,citation_publication_date=2017-11;,citation_cover_date=2017-11;,citation_year=2017;,citation_doi=10.1139/cjfas-2016-0137;,citation_issn=0706-652X;,citation_volume=74;,citation_journal_title=Canadian Journal of Fisheries and Aquatic Sciences;">
+<meta name="citation_reference" content="citation_title=Breaking down seagrass fragmentation in a marine heatwave impacted world heritage area;,citation_author=Michael D Taylor;,citation_author=Simone Strydom;,citation_author=Matthew W Fraser;,citation_author=Ana MM Sequeira;,citation_author=Gary A Kendrick;,citation_publication_date=2025;,citation_cover_date=2025;,citation_year=2025;,citation_journal_title=Remote Sensing in Ecology and Conservation;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Experimental effects of warming and epiphyte grazing on the ecophysiology of two seagrass morphotypes;,citation_author=Cloverley M Lawrence;,citation_author=John J Bolton;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_volume=558;,citation_journal_title=Journal of Experimental Marine Biology and Ecology;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Marine heatwaves and eutrophication jeopardize the seagrass halodule wrightii and associated infauna;,citation_author=Carlos Eduardo Peixoto Dias;,citation_author=Dairana Misturini;,citation_author=Kalina Manabe Brauko;,citation_author=Guido De Gregório Grimaldi;,citation_author=Alessandro Mateus Sloty;,citation_author=Fernanda Dittmar Cardoso;,citation_author=Luis CP Macedo-Soares;,citation_author=Victória Silvestre Corrêa;,citation_author=Sofia Assunção Castro;,citation_author=Eduardo Bastos;,citation_author=others;,citation_publication_date=2025;,citation_cover_date=2025;,citation_year=2025;,citation_journal_title=Marine Environmental Research;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Effect of shading by ulva rigida canopies on growth and carbon balance of the seagrass zostera noltii;,citation_author=Fernando G Brun;,citation_author=Juan J Vergara;,citation_author=Gabriel Navarro;,citation_author=Ignacio Hernández;,citation_author=J Lucas Pérez-Lloréns;,citation_publication_date=2003;,citation_cover_date=2003;,citation_year=2003;,citation_volume=265;,citation_journal_title=Marine Ecology Progress Series;">
+<meta name="citation_reference" content="citation_title=A marine heatwave drives massive losses from the world’s largest seagrass carbon stocks;,citation_author=Ariane Arias-Ortiz;,citation_author=Oscar Serrano;,citation_author=Pere Masqué;,citation_author=Paul S Lavery;,citation_author=Ute Mueller;,citation_author=Gary A Kendrick;,citation_author=M Rozaimi;,citation_author=A Esteban;,citation_author=James W Fourqurean;,citation_author=NJNCC Marbà;,citation_author=others;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_issue=4;,citation_volume=8;,citation_journal_title=Nature Climate Change;,citation_publisher=Nature Publishing Group UK London;">
+<meta name="citation_reference" content="citation_title=Too hot to handle: Unprecedented seagrass death driven by marine heatwave in a world heritage area;,citation_author=Simone Strydom;,citation_author=Kathy Murray;,citation_author=Shaun Wilson;,citation_author=Bart Huntley;,citation_author=Michael Rule;,citation_author=Michael Heithaus;,citation_author=Cindy Bessey;,citation_author=Gary A Kendrick;,citation_author=Derek Burkholder;,citation_author=Matthew W Fraser;,citation_author=others;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_issue=6;,citation_volume=26;,citation_journal_title=Global change biology;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=The root/rhizome system of seagrasses: An asset and a burden;,citation_author=MA Hemminga;,citation_publication_date=1998;,citation_cover_date=1998;,citation_year=1998;,citation_issue=3-4;,citation_volume=39;,citation_journal_title=Journal of Sea Research;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Allometric scaling of seagrass form and productivity.;,citation_author=Carlos M Duarte;,citation_publication_date=1991;,citation_cover_date=1991;,citation_year=1991;,citation_issue=2;,citation_volume=77;,citation_journal_title=Marine ecology progress series. Oldendorf;">
+<meta name="citation_reference" content="citation_title=Extreme temperatures, foundation species, and abrupt ecosystem change: An example from an iconic seagrass ecosystem;,citation_author=Jordan A Thomson;,citation_author=Derek A Burkholder;,citation_author=Michael R Heithaus;,citation_author=James W Fourqurean;,citation_author=Matthew W Fraser;,citation_author=John Statton;,citation_author=Gary A Kendrick;,citation_publication_date=2015;,citation_cover_date=2015;,citation_year=2015;,citation_issue=4;,citation_volume=21;,citation_journal_title=Global change biology;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Environmental factors affecting recent summertime eelgrass diebacks in the lower chesapeake bay: Implications for long-term persistence;,citation_author=Kenneth A Moore;,citation_author=Jessie C Jarvis;,citation_publication_date=2008;,citation_cover_date=2008;,citation_year=2008;,citation_issue=10055;,citation_journal_title=Journal of Coastal Research;">
+<meta name="citation_reference" content="citation_title=Mediterranean warming triggers seagrass (posidonia oceanica) shoot mortality;,citation_author=Núria Marbà;,citation_author=Carlos M Duarte;,citation_publication_date=2010;,citation_cover_date=2010;,citation_year=2010;,citation_issue=8;,citation_volume=16;,citation_journal_title=Global change biology;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Sea surface temperatures and seagrass mortality in florida bay: Spatial and temporal patterns discerned from MODIS and AVHRR data;,citation_author=Daniel F Carlson;,citation_author=Laura A Yarbro;,citation_author=Sheila Scolaro;,citation_author=Michael Poniatowski;,citation_author=Vicki McGee-Absten;,citation_author=Paul R Carlson Jr;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_volume=208;,citation_journal_title=Remote Sensing of Environment;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Seagrass meadows provide a significant resource in support of avifauna;,citation_author=Richard KF Unsworth;,citation_author=Emma G Butterworth;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;,citation_issue=8;,citation_volume=13;,citation_journal_title=Diversity;,citation_publisher=MDPI;">
+<meta name="citation_reference" content="citation_title=Historical analysis exposes catastrophic seagrass loss for the united kingdom;,citation_author=Alix E Green;,citation_author=Richard KF Unsworth;,citation_author=Michael A Chadwick;,citation_author=Peter JS Jones;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;,citation_volume=12;,citation_journal_title=Frontiers in plant science;,citation_publisher=Frontiers;">
+<meta name="citation_reference" content="citation_title=Biomass-dependent seagrass resilience to sediment eutrophication;,citation_author=Rebecca V Gladstone-Gallagher;,citation_author=Ryan W Hughes;,citation_author=Emily J Douglas;,citation_author=Conrad A Pilditch;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_volume=501;,citation_journal_title=Journal of Experimental Marine Biology and Ecology;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Seagrass roots strongly reduce cliff erosion rates in sandy sediments;,citation_author=Eduardo Infantes;,citation_author=Selwyn Hoeks;,citation_author=Matthew P Adams;,citation_author=Tjisse Heide;,citation_author=Marieke M Katwijk;,citation_author=Tjeerd J Bouma;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_volume=700;,citation_journal_title=Marine Ecology Progress Series;">
+<meta name="citation_reference" content="citation_title=Response of seagrass indicators to shifts in environmental stressors: A global review and management synthesis;,citation_author=Guillem Roca;,citation_author=Teresa Alcoverro;,citation_author=Dorte Krause-Jensen;,citation_author=Thorsten Johannes Skovbjerg Balsby;,citation_author=Marieke M Katwijk;,citation_author=Nuria Marbà;,citation_author=Rui Santos;,citation_author=Rohan Arthur;,citation_author=Oriol Mascaró;,citation_author=Yolanda Fernández-Torquemada;,citation_author=others;,citation_publication_date=2016;,citation_cover_date=2016;,citation_year=2016;,citation_volume=63;,citation_journal_title=Ecological Indicators;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Quantifying intertidal macroalgae stocks in the NW iberian peninsula using unmanned aerial vehicle (UAV) multispectral imagery;,citation_author=Miguel J Peidro-Devesa;,citation_author=Andrea Martı́nez-Movilla;,citation_author=Juan Luis Rodrı́guez-Somoza;,citation_author=Joaquı́n Martı́nez Sánchez;,citation_author=Marta Román;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_journal_title=Regional Studies in Marine Science;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Heat stress: An overview of molecular responses in photosynthesis;,citation_author=Suleyman I Allakhverdiev;,citation_author=Vladimir D Kreslavski;,citation_author=Vyacheslav V Klimov;,citation_author=Dmitry A Los;,citation_author=Robert Carpentier;,citation_author=Prasanna Mohanty;,citation_publication_date=2008;,citation_cover_date=2008;,citation_year=2008;,citation_volume=98;,citation_journal_title=Photosynthesis research;,citation_publisher=Springer;">
+<meta name="citation_reference" content="citation_title=R: A language and environment for statistical computing;,citation_author=R Core Team;,citation_publication_date=2025;,citation_cover_date=2025;,citation_year=2025;,citation_fulltext_html_url=https://www.R-project.org/;">
+<meta name="citation_reference" content="citation_title=Using a UAV-mounted multispectral camera for the monitoring of marine macrophytes;,citation_author=Alejandro Román;,citation_author=Antonio Tovar-Sánchez;,citation_author=Irene Olivé;,citation_author=Gabriel Navarro;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;,citation_volume=8;,citation_journal_title=Frontiers in Marine Science;,citation_publisher=Frontiers Media SA;">
+<meta name="citation_reference" content="citation_title=Discriminating seagrasses from green macroalgae in european intertidal areas using high-resolution multispectral drone imagery;,citation_abstract=Coastal areas support seagrass meadows, which offer crucial ecosystem services, including erosion control and carbon sequestration. However, these areas are increasingly impacted by human activities, leading to habitat fragmentation and seagrass decline. In situ surveys, traditionally performed to monitor these ecosystems, face limitations on temporal and spatial coverage, particularly in intertidal zones, prompting the addition of satellite data within monitoring programs. Yet, satellite remote sensing can be limited by too coarse spatial and/or spectral resolutions, making it difficult to discriminate seagrass from other macrophytes in highly heterogeneous meadows. Drone (unmanned aerial vehicle—UAV) images at a very high spatial resolution offer a promising solution to address challenges related to spatial heterogeneity and the intrapixel mixture. This study focuses on using drone acquisitions with a ten spectral band sensor similar to that onboard Sentinel-2 for mapping intertidal macrophytes at low tide (i.e., during a period of emersion) and effectively discriminating between seagrass and green macroalgae. Nine drone flights were conducted at two different altitudes (12 m and 120 m) across heterogeneous intertidal European habitats in France and Portugal, providing multispectral reflectance observation at very high spatial resolution (8 mm and 80 mm, respectively). Taking advantage of their extremely high spatial resolution, the low altitude flights were used to train a Neural Network classifier to discriminate five taxonomic classes of intertidal vegetation: Magnoliopsida (Seagrass), Chlorophyceae (Green macroalgae), Phaeophyceae (Brown algae), Rhodophyceae (Red macroalgae), and benthic Bacillariophyceae (Benthic diatoms), and validated using concomitant field measurements. Classification of drone imagery resulted in an overall accuracy of 94;,citation_author=Simon Oiry;,citation_author=Bede Ffinian Rowe Davies;,citation_author=Ana I. Sousa;,citation_author=Philippe Rosa;,citation_author=Maria Laura Zoffoli;,citation_author=Guillaume Brunier;,citation_author=Pierre Gernez;,citation_author=Laurent Barillé;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_fulltext_html_url=https://www.mdpi.com/2072-4292/16/23/4383;,citation_issue=23;,citation_doi=10.3390/rs16234383;,citation_issn=2072-4292;,citation_volume=16;,citation_journal_title=Remote Sensing;">
+<meta name="citation_reference" content="citation_title=Stan: A probabilistic programming language;,citation_abstract=Stan is a probabilistic programming language for specifying statistical models. A Stan program imperatively defines a log probability function over parameters conditioned on specified data and constants. As of version 2.14.0, Stan provides full Bayesian inference for continuous-variable models through Markov chain Monte Carlo methods such as the No-U-Turn sampler, an adaptive form of Hamiltonian Monte Carlo sampling. Penalized maximum likelihood estimates are calculated using optimization methods such as the limited memory Broyden-Fletcher-Goldfarb-Shanno algorithm. Stan is also a platform for computing log densities and their gradients and Hessians, which can be used in alternative algorithms such as variational Bayes, expectation propagation, and marginal inference using approximate integration. To this end, Stan is set up so that the densities, gradients, and Hessians, along with intermediate quantities of the algorithm such as acceptance probabilities, are easily accessible. Stan can be called from the command line using the cmdstan package, through R using the rstan package, and through Python using the pystan package. All three interfaces support sampling and optimization-based inference with diagnostics and posterior analysis. rstan and pystan also provide access to log probabilities, gradients, Hessians, parameter transforms, and specialized plotting.;,citation_author=Bob Carpenter;,citation_author=Andrew Gelman;,citation_author=Matthew D. Hoffman;,citation_author=Daniel Lee;,citation_author=Ben Goodrich;,citation_author=Michael Betancourt;,citation_author=Marcus Brubaker;,citation_author=Jiqiang Guo;,citation_author=Peter Li;,citation_author=Allen Riddell;,citation_publication_date=2017;,citation_cover_date=2017;,citation_year=2017;,citation_fulltext_html_url=https://www.jstatsoft.org/index.php/jss/article/view/v076i01;,citation_issue=1;,citation_doi=10.18637/jss.v076.i01;,citation_volume=76;,citation_journal_title=Journal of Statistical Software;">
+<meta name="citation_reference" content="citation_title=Bayesian item response modeling in r with brms and stan;,citation_abstract=&amp;amp;amp;amp;lt;p&amp;amp;gt;Item response theory (IRT) is widely applied in the human sciences to model persons’ responses on a set of items measuring one or more latent constructs. While several R packages have been developed that implement IRT models, they tend to be restricted to respective pre-specified classes of models. Further, most implementations are frequentist while the availability of Bayesian methods remains comparably limited. I demonstrate how to use the R package brms together with the probabilistic programming language Stan to specify and fit a wide range of Bayesian IRT models using flexible and intuitive multilevel formula syntax. Further, item and person parameters can be related in both a linear or non-linear manner. Various distributions for categorical, ordinal, and continuous responses are supported. Users may even define their own custom response distribution for use in the presented framework. Common IRT model classes that can be specified natively in the presented framework include 1PL and 2PL logistic models optionally also containing guessing parameters, graded response and partial credit ordinal models, as well as drift diffusion models of response times coupled with binary decisions. Posterior distributions of item and person parameters can be conveniently extracted and postprocessed. Model fit can be evaluated and compared using Bayes factors and efficient cross-validation procedures.&amp;amp;lt;/p&amp;amp;gt;;,citation_author=Paul-Christian Bürkner;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;,citation_fulltext_html_url=https://www.jstatsoft.org/index.php/jss/article/view/v100i05;,citation_issue=5;,citation_doi=10.18637/jss.v100.i05;,citation_volume=100;,citation_journal_title=Journal of Statistical Software;">
+<meta name="citation_reference" content="citation_title=RStan: The r interface to stan;,citation_author=C Stan Development Team;,citation_author=others;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_journal_title=R package version 2.21. 2;">
+<meta name="citation_reference" content="citation_title=Hyperspectral data analysis in R: The hsdar package;,citation_author=Lukas W. Lehnert;,citation_author=Hanna Meyer;,citation_author=Wolfgang A. Obermeier;,citation_author=Brenner Silva;,citation_author=Bianca Regeling;,citation_author=Boris Thies;,citation_author=Jörg Bendix;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_issue=12;,citation_doi=10.18637/jss.v089.i12;,citation_volume=89;,citation_journal_title=Journal of Statistical Software;">
+<meta name="citation_reference" content="citation_title=RS3 software;,citation_author=Malvern Panalytical;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_fulltext_html_url=https://www.malvernpanalytical.com/en/support/product-support/software/rs3;">
+<meta name="citation_reference" content="citation_title=Intertidal chamber;,citation_author=Electric Blue;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_fulltext_html_url=https://electricblue.eu/intertidal-chamber;">
+<meta name="citation_reference" content="citation_title=Water pollution from agricultural activities: A critical global review;,citation_author=Iqra Zahoor;,citation_author=Ayesha Mushtaq;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_issue=1;,citation_volume=23;,citation_journal_title=Int. J. Chem. Biochem. Sci;">
+<meta name="citation_reference" content="citation_title=The role of photosynthesis and oxidative reactions in leaf blackening of protea neriifolia r. Br. leaves;,citation_author=R. B. Jones;,citation_author=K. A. Clayton-Greene;,citation_publication_date=1992;,citation_cover_date=1992;,citation_year=1992;,citation_doi=10.1016/S0304-4238(05)80016-0;,citation_volume=50;,citation_journal_title=Scientia Horticulturae;,citation_publisher=Elsevier Science Publishers B.V.;">
+<meta name="citation_reference" content="citation_title=Characterization of seagrasses at two new locations in the eastern tropical pacific (el jobo and matapalito, costa rica);,citation_author=Jimena Samper-Villarreal;,citation_author=Rebeca Cambronero Bolaños;,citation_author=Maike Heidemeyer;,citation_author=Marlon Mora Vargas;,citation_author=Randall Mora Vargas;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_volume=165;,citation_journal_title=Aquatic botany;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Carbon storage in seagrass soils: Long-term nutrient history exceeds the effects of near-term nutrient enrichment;,citation_author=AR Armitage;,citation_author=James W Fourqurean;,citation_publication_date=2016;,citation_cover_date=2016;,citation_year=2016;,citation_issue=1;,citation_volume=13;,citation_journal_title=Biogeosciences;,citation_publisher=Copernicus Publications Göttingen, Germany;">
+<meta name="citation_reference" content="citation_title=Biodiversity, ecosystem services, and the conservation of seagrass meadows;,citation_author=RFK Unsworth;,citation_author=LEANNE C Cullen-Unsworth;,citation_publication_date=2014;,citation_cover_date=2014;,citation_year=2014;,citation_volume=19;,citation_journal_title=Coast. Conserv;">
+<meta name="citation_reference" content="citation_title=The relationship between seagrass (posidonia oceanica) decline and sulfide porewater concentration in carbonate sediments;,citation_author=Maria Ll Calleja;,citation_author=Núria Marbà;,citation_author=Carlos M Duarte;,citation_publication_date=2007;,citation_cover_date=2007;,citation_year=2007;,citation_issue=3-4;,citation_volume=73;,citation_journal_title=Estuarine, Coastal and Shelf Science;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Seagrass–sediment feedback: An exploration using a non-recursive structural equation model;,citation_author=Eelke O Folmer;,citation_author=Matthijs Geest;,citation_author=Erik Jansen;,citation_author=Han Olff;,citation_author=T Michael Anderson;,citation_author=Theunis Piersma;,citation_author=Jan A Gils;,citation_publication_date=2012;,citation_cover_date=2012;,citation_year=2012;,citation_volume=15;,citation_journal_title=Ecosystems;,citation_publisher=Springer;">
+<meta name="citation_reference" content="citation_title=An approach to measurement of particle flux and sediment retention within seagrass (posidonia oceanica) meadows;,citation_author=E Gacia;,citation_author=TC Granata;,citation_author=CM Duarte;,citation_publication_date=1999;,citation_cover_date=1999;,citation_year=1999;,citation_issue=1-4;,citation_volume=65;,citation_journal_title=Aquatic Botany;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Remote sensing in seagrass ecology: Coupled dynamics between migratory herbivorous birds and intertidal meadows observed by satellite during four decades;,citation_author=Maria Laura Zoffoli;,citation_author=Pierre Gernez;,citation_author=Simon Oiry;,citation_author=Laurent Godet;,citation_author=Sébastien Dalloyau;,citation_author=Bede Ffinian Rowe Davies;,citation_author=Laurent Barillé;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_issue=3;,citation_doi=10.1002/rse2.319;,citation_volume=9;,citation_journal_title=Remote Sensing in Ecology and Conservation;,citation_publisher=John Wiley &amp;amp;amp; Sons Ltd on behalf of Zoological Society of London;">
+<meta name="citation_reference" content="citation_title=Physical and physiological basis for the reflectance of visible and near-infrared radiation from vegetation;,citation_author=Edward B. Knipling;,citation_publication_date=1970;,citation_cover_date=1970;,citation_year=1970;,citation_doi=10.1016/S0034-4257(70)80021-9;,citation_volume=1;,citation_journal_title=Remote Sensing of Environment;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Influence of heat shock on chlorophyll fluorescence of white oak (quercus pubescens willd.) leaves;,citation_author=A. Dascaliuc;,citation_author=T. Ralea;,citation_author=P. Cuza;,citation_publication_date=2007;,citation_cover_date=2007;,citation_year=2007;,citation_issue=3;,citation_doi=10.1007/s11099-007-0084-3;,citation_volume=45;,citation_journal_title=Photosynthetica;">
+<meta name="citation_reference" content="citation_title=Intensity duration and frequency of heat wave in different phases of MJO over india;,citation_author=Rani Devi;,citation_author=KC Gouda;,citation_author=Smrutishree Lenka;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_volume=300;,citation_journal_title=Atmospheric Research;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Quantifying the role of variability in future intensification of heat extremes;,citation_author=Claudia Simolo;,citation_author=Susanna Corti;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_issue=7930;,citation_doi=10.1038/s41467-022-35571-0;,citation_volume=13;,citation_journal_title=Nature Communications;,citation_publisher=Nature Publishing Group;">
+<meta name="citation_reference" content="citation_title=Heat waves and their significance for a temperate benthic community: A near-natural experimental approach;,citation_author=Christian Pansch;,citation_author=Marco Scotti;,citation_author=Francisco R. Barboza;,citation_author=others;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_issue=10;,citation_doi=10.1111/gcb.14282;,citation_volume=24;,citation_journal_title=Global Change Biology;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Heat waves, the new normal: Summertime temperature extremes will impact animals, ecosystems, and human communities;,citation_author=Jonathon H. Stillman;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_issue=2;,citation_doi=10.1152/physiol.00040.2018;,citation_volume=34;,citation_journal_title=Physiology;,citation_publisher=American Physiological Society;">
+<meta name="citation_reference" content="citation_title=Marine heatwaves threaten global biodiversity and the provision of ecosystem services;,citation_author=Dan A. Smale;,citation_author=Thomas Wernberg;,citation_author=Eric C. J. Oliver;,citation_author=others;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_issue=4;,citation_doi=10.1038/s41558-019-0412-1;,citation_volume=9;,citation_journal_title=Nature Climate Change;,citation_publisher=Nature Publishing Group;">
+<meta name="citation_reference" content="citation_title=Projected marine heatwaves in the 21st century and the potential for ecological impact;,citation_author=Eric C. J. Oliver;,citation_author=Michael T. Burrows;,citation_author=Markus G. Donat;,citation_author=others;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_doi=10.3389/fmars.2019.00734;,citation_volume=6;,citation_journal_title=Frontiers in Marine Science;,citation_publisher=Frontiers;">
+<meta name="citation_reference" content="citation_title=Increasing intensity of extreme heatwaves: The crucial role of metrics;,citation_author=Emmanuele Russo;,citation_author=Daniela I. V. Domeisen;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_issue=10;,citation_doi=10.1029/2023GL103540;,citation_volume=50;,citation_journal_title=Geophysical Research Letters;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Heat wave intensity duration frequency curve: A multivariate approach for hazard and attribution analysis;,citation_author=Omid Mazdiyasni;,citation_author=Mojtaba Sadegh;,citation_author=Felicia Chiang;,citation_author=Amir AghaKouchak;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_doi=10.1038/s41598-019-50643-w;,citation_volume=9;,citation_journal_title=Scientific Reports;,citation_publisher=Nature Publishing Group;">
+<meta name="citation_reference" content="citation_title=Ecosystem collapse and climate change;,citation_author=Josep G Canadell;,citation_author=Robert B Jackson;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;">
+<meta name="citation_reference" content="citation_title=Temperature tolerance and survival of intertidal populations of the seagrass zostera noltii (hornemann) in southern europe (ria formosa, portugal);,citation_author=SI Massa;,citation_author=Sophie Arnaud-Haond;,citation_author=GA Pearson;,citation_author=EA Serrão;,citation_publication_date=2009;,citation_cover_date=2009;,citation_year=2009;,citation_volume=619;,citation_journal_title=Hydrobiologia;,citation_publisher=Springer;">
+<meta name="citation_reference" content="citation_title=Increased temperature reduces the positive effect of sulfide-detoxification mutualism on zostera noltii nutrient uptake and growth;,citation_author=Jimmy De Fouw;,citation_author=Katrin Rehlmeyer;,citation_author=Matthijs Geest;,citation_author=Alfons JP Smolders;,citation_author=Tjisse Van Der Heide;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_volume=692;,citation_journal_title=Marine Ecology Progress Series;">
+<meta name="citation_reference" content="citation_title=Multi-and hyperspectral classification of soft-bottom intertidal vegetation using a spectral library for coastal biodiversity remote sensing;,citation_author=Bede Ffinian Rowe Davies;,citation_author=Pierre Gernez;,citation_author=Andréa Geraud;,citation_author=Simon Oiry;,citation_author=Philippe Rosa;,citation_author=Maria Laura Zoffoli;,citation_author=Laurent Barillé;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_doi=10.1016/j.rse.2023.113554;,citation_volume=290;,citation_journal_title=Remote Sensing of Environment;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=European seagrasses: An introduction to monitoring and management.;,citation_author=Jens Borum;,citation_author=Carlos M Duarte;,citation_author=Dorte Krause-Jensen;,citation_author=Tina M Greve;,citation_publication_date=2004;,citation_cover_date=2004;,citation_year=2004;,citation_doi=10.25607/OBP-1997;">
+<meta name="citation_reference" content="citation_title=Genome-wide transcriptomic responses of the seagrasses zostera marina and nanozostera noltii under a simulated heatwave confirm functional types;,citation_author=Susanne U Franssen;,citation_author=Jenny Gu;,citation_author=Gidon Winters;,citation_author=Ann-Kathrin Huylmans;,citation_author=Isabell Wienpahl;,citation_author=Maximiliane Sparwel;,citation_author=James A Coyer;,citation_author=Jeanine L Olsen;,citation_author=Thorsten BH Reusch;,citation_author=Erich Bornberg-Bauer;,citation_publication_date=2014;,citation_cover_date=2014;,citation_year=2014;,citation_volume=15;,citation_journal_title=Marine Genomics;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=A sentinel watching over inter-tidal seagrass phenology across western europe and north africa;,citation_author=Bede Ffinian Rowe Davies;,citation_author=Simon Oiry;,citation_author=Philippe Rosa;,citation_author=Maria Laura Zoffoli;,citation_author=Ana I Sousa;,citation_author=Oliver R Thomas;,citation_author=Dan A Smale;,citation_author=Melanie C Austen;,citation_author=Lauren Biermann;,citation_author=Martin J Attrill;,citation_author=others;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_issue=1;,citation_doi=10.1038/s43247-024-01543-z;,citation_volume=5;,citation_journal_title=Communications Earth &amp;amp;amp; Environment;,citation_publisher=Nature Publishing Group UK London;">
+<meta name="citation_reference" content="citation_title=Intertidal seagrass extent from sentinel-2 time-series show distinct trajectories in western europe;,citation_author=Bede Ffinian Rowe Davies;,citation_author=Simon Oiry;,citation_author=Philippe Rosa;,citation_author=Maria Laura Zoffoli;,citation_author=Ana I Sousa;,citation_author=Oliver R Thomas;,citation_author=Dan A Smale;,citation_author=Melanie C Austen;,citation_author=Lauren Biermann;,citation_author=Martin J Attrill;,citation_author=others;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_doi=10.1016/j.rse.2024.114340;,citation_volume=312;,citation_journal_title=Remote Sensing of Environment;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Ecosystem recovery after climatic extremes enhanced by genotypic diversity;,citation_author=Thorsten BH Reusch;,citation_author=Anneli Ehlers;,citation_author=August Hämmerli;,citation_author=Boris Worm;,citation_publication_date=2005;,citation_cover_date=2005;,citation_year=2005;,citation_issue=8;,citation_doi=10.1073/pnas.0500008102;,citation_volume=102;,citation_journal_title=Proceedings of the National Academy of Sciences;,citation_publisher=National Acad Sciences;">
+<meta name="citation_reference" content="citation_title=The velocity of climate change;,citation_author=Scott R Loarie;,citation_author=Philip B Duffy;,citation_author=Healy Hamilton;,citation_author=Gregory P Asner;,citation_author=Christopher B Field;,citation_author=David D Ackerly;,citation_publication_date=2009;,citation_cover_date=2009;,citation_year=2009;,citation_issue=7276;,citation_volume=462;,citation_journal_title=Nature;,citation_publisher=Nature Publishing Group UK London;">
+<meta name="citation_reference" content="citation_title=Genetic diversity enhances the resistance of a seagrass ecosystem to disturbance;,citation_author=A Randall Hughes;,citation_author=John J Stachowicz;,citation_publication_date=2004;,citation_cover_date=2004;,citation_year=2004;,citation_issue=24;,citation_doi=10.1073/pnas.0402642101;,citation_volume=101;,citation_journal_title=Proceedings of the National Academy of Sciences;,citation_publisher=National Acad Sciences;">
+<meta name="citation_reference" content="citation_title=Seagrass ecosystem trajectory depends on the relative timescales of resistance, recovery and disturbance;,citation_author=Katherine R O’Brien;,citation_author=Michelle Waycott;,citation_author=Paul Maxwell;,citation_author=Gary A Kendrick;,citation_author=James W Udy;,citation_author=Angus JP Ferguson;,citation_author=Kieryn Kilminster;,citation_author=Peter Scanes;,citation_author=Len J McKenzie;,citation_author=Kathryn McMahon;,citation_author=others;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_volume=134;,citation_journal_title=Marine Pollution Bulletin;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Predicting seagrass ecosystem resilience to marine heatwave events of variable duration, frequency and re-occurrence patterns with gaps;,citation_author=Paula Sobenko Hatum;,citation_author=Kathryn McMahon;,citation_author=Kerrie Mengersen;,citation_author=Kieryn Kilminster;,citation_author=Paul Pao-Yen Wu;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_issue=6;,citation_doi=10.1002/aqc.4210;,citation_volume=34;,citation_journal_title=Aquatic Conservation: Marine and Freshwater Ecosystems;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Eelgrass meadow response to heat stress. II. Impacts of ocean warming and marine heatwaves measured by novel metrics;,citation_author=Amelie C Berger;,citation_author=Peter Berg;,citation_author=Karen J McGlathery;,citation_author=Lillian R Aoki;,citation_author=Kylor Kerns;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_doi=10.3354/meps14588;,citation_volume=736;,citation_journal_title=Marine Ecology Progress Series;">
+<meta name="citation_reference" content="citation_title=Sen2Cor: Sentinel-2 atmospheric correction processor;,citation_abstract=Sen2Cor is a processor for Sentinel-2 Level-2A product generation and formatting, including atmospheric, terrain, and cirrus correction of Top-Of-Atmosphere Level-1C input data. It provides bottom-of-atmosphere corrected reflectance images in various formats.;,citation_author=European Space Agency;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_publisher=European Space Agency (ESA); https://step.esa.int/main/third-party-plugins-2/sen2cor/;">
+<meta name="citation_reference" content="citation_title=Intergovernmental oceanographic commission ; sea level monitoring station - le conquet, france (LECY);,citation_author=undefined IOC;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_fulltext_html_url=https://www.ioc-sealevelmonitoring.org/station.php?code=lecy;">
+<meta name="citation_reference" content="citation_title=Service hydrographique et océanographique de la marine ; références altimétriques maritimes: Ports de france métropolitaine et d’outre-mer, cotes du zéro hydrographique et niveaux caractéristiques de la marée;,citation_author=undefined SHOM;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_fulltext_html_url=https://diffusion.shom.fr/references-altimetriques-maritimes-ram.html;,citation_isbn=978-2-11-139505-3;">
+<meta name="citation_reference" content="citation_title=Service hydrographique et océanographique de la marine ; bathymétrie Litto3D® bretagne 2018-2021;,citation_author=undefined SHOM;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;,citation_fulltext_html_url=https://services.data.shom.fr/geonetwork/srv/fre/catalog.search#/metadata/BATHYMETRIE_LITTO3D_BZH_2018_2021.xml;">
+<meta name="citation_reference" content="citation_title=Copernicus open access hub;,citation_abstract=The Copernicus Open Access Hub (previously known as Sentinels Scientific Data Hub) provides free access to Sentinel-1, Sentinel-2, and Sentinel-3 data, among others. Sentinel-2 data offers high-resolution optical imagery for land monitoring, including features like vegetation, soil, water cover, inland waterways, and coastal areas.;,citation_author=European Space Agency;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_publisher=European Space Agency (ESA); https://scihub.copernicus.eu;">
+<meta name="citation_reference" content="citation_title=Nearshore and offshore co-occurrence of marine heatwaves and cold-spells;,citation_author=Robert W Schlegel;,citation_author=Eric CJ Oliver;,citation_author=Thomas Wernberg;,citation_author=Albertus J Smit;,citation_publication_date=2017;,citation_cover_date=2017;,citation_year=2017;,citation_volume=151;,citation_journal_title=Progress in Oceanography;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=European north west shelf/iberia biscay irish seas – high resolution ODYSSEA sea surface temperature multi-sensor L3 observations reprocessed, e.u. Copernicus marine service information (CMEMS). Marine data store (MDS). (Accessed on 17-10-2024);,citation_author=undefined CMEMS;,citation_publication_date=2024;,citation_cover_date=2024;,citation_year=2024;,citation_doi=10.48670/moi-00311;">
+<meta name="citation_reference" content="citation_title=The role of herbivory in structuring tropical seagrass ecosystem service delivery;,citation_author=Abigail L Scott;,citation_author=Paul H York;,citation_author=Clare Duncan;,citation_author=Peter I Macreadie;,citation_author=Rod M Connolly;,citation_author=Megan T Ellis;,citation_author=Jessie C Jarvis;,citation_author=Kristin I Jinks;,citation_author=Helene Marsh;,citation_author=Michael A Rasheed;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_volume=9;,citation_journal_title=Frontiers in Plant Science;,citation_publisher=Frontiers Media SA;">
+<meta name="citation_reference" content="citation_title=Seagrass ecosystems of andaman and nicobar islands: Status and future perspective.;,citation_author=Chatragadda Ramesh;,citation_author=Raju Mohanraju;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_issue=4;,citation_volume=7;,citation_journal_title=Environmental &amp;amp;amp; Earth Sciences Research Journal;">
+<meta name="citation_reference" content="citation_title=The planetary role of seagrass conservation;,citation_author=Richard KF Unsworth;,citation_author=Leanne C Cullen-Unsworth;,citation_author=Benjamin LH Jones;,citation_author=Richard J Lilley;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_issue=6606;,citation_volume=377;,citation_journal_title=Science;,citation_publisher=American Association for the Advancement of Science;">
+<meta name="citation_reference" content="citation_title=Blue carbon stock in zostera noltei meadows at ria de aveiro coastal lagoon (portugal) over a decade;,citation_author=Ana I Sousa;,citation_author=José Figueiredo Silva;,citation_author=Ana Azevedo;,citation_author=Ana I Lillebø;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_issue=1;,citation_doi=10.1038/s41598-019-50425-4;,citation_volume=9;,citation_journal_title=Scientific reports;,citation_publisher=Nature Publishing Group UK London;">
+<meta name="citation_reference" content="citation_title=Decadal increase in the ecological status of a north-atlantic intertidal seagrass meadow observed with multi-mission satellite time-series;,citation_author=Maria Laura Zoffoli;,citation_author=Pierre Gernez;,citation_author=Laurent Godet;,citation_author=Steef Peters;,citation_author=Simon Oiry;,citation_author=Laurent Barillé;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;,citation_volume=130;,citation_journal_title=Ecological Indicators;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Sentinel-2 remote sensing of zostera noltei-dominated intertidal seagrass meadows;,citation_author=Maria Laura Zoffoli;,citation_author=Pierre Gernez;,citation_author=Philippe Rosa;,citation_author=Anthony Le Bris;,citation_author=Vittorio E Brando;,citation_author=Anne-Laure Barillé;,citation_author=Nicolas Harin;,citation_author=Steef Peters;,citation_author=Kathrin Poser;,citation_author=Lazaros Spaias;,citation_author=others;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_doi=10.1016/j.rse.2020.112020;,citation_volume=251;,citation_journal_title=Remote Sensing of Environment;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Plant–water relations of intertidal and subtidal seagrasses;,citation_author=Jose M. Sandoval-Gil;,citation_author=Isabel Barrote;,citation_author=Joao Silva;,citation_author=Irene Olivé;,citation_author=Monya M. Costa;,citation_author=Juan M. Ruiz;,citation_author=Lázaro Marı́n-Guirao;,citation_author=Jose L. Sánchez-Lizaso;,citation_author=Rui Santos;,citation_publication_date=2015;,citation_cover_date=2015;,citation_year=2015;,citation_issue=6;,citation_volume=36;,citation_journal_title=Marine Ecology;,citation_publisher=Blackwell Verlag GmbH;">
+<meta name="citation_reference" content="citation_title=Individual and population plasticity of the seagrass zostera noltii along a vertical intertidal gradient;,citation_author=Susana Cabaço;,citation_author=Raquel Machás;,citation_author=Rui Santos;,citation_publication_date=2009;,citation_cover_date=2009;,citation_year=2009;,citation_issue=2;,citation_volume=82;,citation_journal_title=Estuarine, Coastal and Shelf Science;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Global wetland outlook: State of the world’s wetlands and their services to people;,citation_author=Royal C Gardner;,citation_author=C Finlayson;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_fulltext_html_url=https://ssrn.com/abstract=3261606;,citation_conference_title=Ramsar convention secretariat;">
+<meta name="citation_reference" content="citation_title=Stabilizing effects of seagrass meadows on coastal water benthic food webs;,citation_author=Emilia Jankowska;,citation_author=Loı̈c N Michel;,citation_author=Gilles Lepoint;,citation_author=Maria Włodarska-Kowalczuk;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_volume=510;,citation_journal_title=Journal of Experimental Marine Biology and Ecology;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Accelerating loss of seagrasses across the globe threatens coastal ecosystems;,citation_author=Michelle Waycott;,citation_author=Carlos M Duarte;,citation_author=Tim JB Carruthers;,citation_author=Robert J Orth;,citation_author=William C Dennison;,citation_author=Suzanne Olyarnik;,citation_author=Ainsley Calladine;,citation_author=James W Fourqurean;,citation_author=Kenneth L Heck Jr;,citation_author=A Randall Hughes;,citation_author=others;,citation_publication_date=2009;,citation_cover_date=2009;,citation_year=2009;,citation_issue=30;,citation_volume=106;,citation_journal_title=Proceedings of the national academy of sciences;,citation_publisher=National Acad Sciences;">
+<meta name="citation_reference" content="citation_title=Meadow trophic status regulates the nitrogen filter function of tropical seagrasses in seasonally eutrophic coastal waters;,citation_author=Esther Thomsen;,citation_author=Lucia S Herbeck;,citation_author=Inés G Viana;,citation_author=Tim C Jennerjahn;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_issue=8;,citation_volume=68;,citation_journal_title=Limnology and Oceanography;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=How the optical properties of leaves modify the absorption and scattering of energy and enhance leaf functionality;,citation_author=Susan L Ustin;,citation_author=Stéphane Jacquemoud;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_journal_title=Remote sensing of plant biodiversity;,citation_publisher=Springer International Publishing;">
+<meta name="citation_reference" content="citation_title=Bitkilerde ağır metal stresine verilen fizyolojik ve moleküler yanıtlar;,citation_author=Kübra Sevgi;,citation_author=Sema Leblebici;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_issue=4;,citation_volume=7;,citation_journal_title=Journal of Anatolian Environmental and Animal Sciences;,citation_publisher=Bülent VEREP;">
+<meta name="citation_reference" content="citation_title=Distribution and localised effects of the invasive ascidian didemnum perlucidum (monniot 1983) in an urban estuary;,citation_author=Tiffany Schenk Simpson;,citation_author=Thomas Wernberg;,citation_author=Justin I McDonald;,citation_publication_date=2016;,citation_cover_date=2016;,citation_year=2016;,citation_issue=5;,citation_volume=11;,citation_journal_title=PLoS One;,citation_publisher=Public Library of Science San Francisco, CA USA;">
+<meta name="citation_reference" content="citation_title=Heat wave intensity can vary the cumulative effects of multiple environmental stressors on posidonia oceanica seedlings;,citation_author=Laura Guerrero-Meseguer;,citation_author=Arnaldo Marı́n;,citation_author=Carlos Sanz-Lázaro;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_volume=159;,citation_journal_title=Marine Environmental Research;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Summary for policymakers;,citation_author=Intergovernmental Panel Climate Change (IPCC);,citation_editor=H. Lee Core Writing Team;,citation_editor=J. Romero;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_fulltext_html_url=https://doi.org/10.59327/IPCC/AR6-9789291691647.001;,citation_doi=10.59327/IPCC/AR6-9789291691647.001;">
+<meta name="citation_reference" content="citation_title=Heat waves, the new normal: Summertime temperature extremes will impact animals, ecosystems, and human communities;,citation_author=Jonathon H Stillman;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_issue=2;,citation_volume=34;,citation_journal_title=Physiology;,citation_publisher=American Physiological Society Bethesda, MD;">
+<meta name="citation_reference" content="citation_title=A hierarchical approach to defining marine heatwaves;,citation_author=Alistair J Hobday;,citation_author=Lisa V Alexander;,citation_author=Sarah E Perkins;,citation_author=Dan A Smale;,citation_author=Sandra C Straub;,citation_author=Eric CJ Oliver;,citation_author=Jessica A Benthuysen;,citation_author=Michael T Burrows;,citation_author=Markus G Donat;,citation_author=Ming Feng;,citation_author=others;,citation_publication_date=2016;,citation_cover_date=2016;,citation_year=2016;,citation_volume=141;,citation_journal_title=Progress in oceanography;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Effects of warming on biological interactions between clams and the seagrass zostera noltei: A case study using open top chambers;,citation_author=Salvador Román;,citation_author=Elsa Vázquez;,citation_author=Marta Román;,citation_author=Rosa M Viejo;,citation_author=Sarah A Woodin;,citation_author=David S Wethey;,citation_author=Jesús S Troncoso;,citation_author=Celia Olabarria;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_volume=276;,citation_journal_title=Estuarine, Coastal and Shelf Science;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=On the measurement of heat waves;,citation_author=Sarah E Perkins;,citation_author=Lisa V Alexander;,citation_publication_date=2013;,citation_cover_date=2013;,citation_year=2013;,citation_issue=13;,citation_volume=26;,citation_journal_title=Journal of climate;">
+<meta name="citation_reference" content="citation_title=Chronically elevated sea surface temperatures revealed high susceptibility of the eelgrass zostera marina to winter and spring warming;,citation_author=Yvonne Sawall;,citation_author=Maysa Ito;,citation_author=Christian Pansch;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;,citation_issue=12;,citation_volume=66;,citation_journal_title=Limnology and Oceanography;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Designing a benthic monitoring programme with multiple conflicting objectives;,citation_author=Allert I Bijleveld;,citation_author=Jan A Gils;,citation_author=Jaap Meer;,citation_author=Anne Dekinga;,citation_author=Casper Kraan;,citation_author=Henk W Veer;,citation_author=Theunis Piersma;,citation_publication_date=2012;,citation_cover_date=2012;,citation_year=2012;,citation_issue=3;,citation_volume=3;,citation_journal_title=Methods in Ecology and Evolution;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Are clam-seagrass interactions affected by heatwaves during emersion?;,citation_author=Marta Román;,citation_author=Franck Gilbert;,citation_author=Rosa M Viejo;,citation_author=Salvador Román;,citation_author=Jesús S Troncoso;,citation_author=Elsa Vázquez;,citation_author=Celia Olabarria;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_volume=186;,citation_journal_title=Marine Environmental Research;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Physiological and morphological effects of a marine heatwave on the seagrass cymodocea nodosa;,citation_author=Alizé Deguette;,citation_author=Isabel Barrote;,citation_author=João Silva;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_issue=1;,citation_volume=12;,citation_journal_title=Scientific Reports;,citation_publisher=Nature Publishing Group UK London;">
+<meta name="citation_reference" content="citation_title=Effects of a simulated heat wave on photophysiology and gene expression of high-and low-latitude populations of zostera marina;,citation_author=Gidon Winters;,citation_author=Peter Nelle;,citation_author=Birgit Fricke;,citation_author=Gisep Rauch;,citation_author=Thorsten BH Reusch;,citation_publication_date=2011;,citation_cover_date=2011;,citation_year=2011;,citation_volume=435;,citation_journal_title=Marine Ecology Progress Series;">
+<meta name="citation_reference" content="citation_title=Satellite-assisted monitoring of water quality to support the implementation of the water framework directive;,citation_author=E Papathanasopoulou;,citation_author=SGH Simis;,citation_author=K Alikas;,citation_author=A Ansper;,citation_author=J Anttila;,citation_author=A Barillé;,citation_author=L Barillé;,citation_author=V Brando;,citation_author=M Bresciani;,citation_author=M Bučas;,citation_author=others;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_journal_title=EOMORES white paper;">
+<meta name="citation_reference" content="citation_title=Vegetation indices, remote sensing and forest monitoring;,citation_author=Alfredo R Huete;,citation_publication_date=2012;,citation_cover_date=2012;,citation_year=2012;,citation_issue=9;,citation_volume=6;,citation_journal_title=Geography Compass;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Agricultural drought detection with MODIS based vegetation health indices in southeast germany;,citation_author=Simon Kloos;,citation_author=Ye Yuan;,citation_author=Mariapina Castelli;,citation_author=Annette Menzel;,citation_publication_date=2021;,citation_cover_date=2021;,citation_year=2021;,citation_issue=19;,citation_volume=13;,citation_journal_title=Remote Sensing;,citation_publisher=MDPI;">
+<meta name="citation_reference" content="citation_title=Identifying urban vegetation stress factors based on open access remote sensing imagery and field observations;,citation_author=Irina Cârlan;,citation_author=Bogdan-Andrei Mihai;,citation_author=Constantin Nistor;,citation_author=André Große-Stoltenberg;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_volume=55;,citation_journal_title=Ecological Informatics;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Mangrove vegetation health index analysis by implementing NDVI (normalized difference vegetation index) classification method on sentinel-2 image data case study: Segara anakan, kabupaten cilacap;,citation_author=MR Akbar;,citation_author=PAA Arisanto;,citation_author=BA Sukirno;,citation_author=PH Merdeka;,citation_author=MM Priadhi;,citation_author=S Zallesa;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_volume=584;,citation_conference_title=IOP conference series: Earth and environmental science;,citation_conference=IOP Publishing;">
+<meta name="citation_reference" content="citation_title=Drought stress in winter wheat-physiological responses and detection using remote and proximal sensing techniques;,citation_author=Sandra Skendzic;,citation_publication_date=2023;,citation_cover_date=2023;,citation_year=2023;,citation_fulltext_html_url=https://repository.utm.md/handle/5014/25282;,citation_conference_title=Smart life sciences and technology for sustainable development;">
+<meta name="citation_reference" content="citation_title=The photochemical reflectance index (PRI) and the remote sensing of leaf, canopy and ecosystem radiation use efficiencies: A review and meta-analysis;,citation_author=Martı́n F Garbulsky;,citation_author=Josep Peñuelas;,citation_author=John Gamon;,citation_author=Yoshio Inoue;,citation_author=Iolanda Filella;,citation_publication_date=2011;,citation_cover_date=2011;,citation_year=2011;,citation_issue=2;,citation_volume=115;,citation_journal_title=Remote sensing of environment;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=Detecting the onset of autumn leaf senescence in deciduous forest trees of the temperate zone;,citation_author=Bertold Mariën;,citation_author=Manuela Balzarolo;,citation_author=Inge Dox;,citation_author=Sebastien Leys;,citation_author=Marchand J Lorène;,citation_author=Charly Geron;,citation_author=Miguel Portillo-Estrada;,citation_author=Hamada AbdElgawad;,citation_author=Han Asard;,citation_author=Matteo Campioli;,citation_publication_date=2019;,citation_cover_date=2019;,citation_year=2019;,citation_issue=1;,citation_volume=224;,citation_journal_title=New Phytologist;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Leaf reflectance and photo-and antioxidant protection in field-grown summer-stressed phillyrea angustifolia. Optical signals of oxidative stress?;,citation_author=Josep Peñuelas;,citation_author=Sergi Munné-Bosch;,citation_author=Joan Llusià;,citation_author=Iolanda Filella;,citation_publication_date=2004;,citation_cover_date=2004;,citation_year=2004;,citation_issue=1;,citation_volume=162;,citation_journal_title=New Phytologist;,citation_publisher=Wiley Online Library;">
+<meta name="citation_reference" content="citation_title=Senescence and spectral reflectance in leaves of northern pin oak (quercus palustris muenchh.);,citation_author=M Boyer;,citation_author=J_ Miller;,citation_author=M Belanger;,citation_author=E Hare;,citation_author=Jiyou Wu;,citation_publication_date=1988;,citation_cover_date=1988;,citation_year=1988;,citation_issue=1;,citation_volume=25;,citation_journal_title=Remote Sensing of Environment;,citation_publisher=Elsevier;">
+<meta name="citation_reference" content="citation_title=How far can we classify macroalgae remotely? An example using a new spectral library of species from the south west atlantic (argentine patagonia);,citation_author=O Magalı́ Olmedo-Masat;,citation_author=M Paula Raffo;,citation_author=Daniel Rodrı́guez-Pérez;,citation_author=Marianela Arijón;,citation_author=Noela Sánchez-Carnero;,citation_publication_date=2020;,citation_cover_date=2020;,citation_year=2020;,citation_issue=23;,citation_volume=12;,citation_journal_title=Remote Sensing;,citation_publisher=MDPI;">
+<meta name="citation_reference" content="citation_title=New hyperspectral procedure to discriminate intertidal macroalgae;,citation_author=Florian Douay;,citation_author=Charles Verpoorter;,citation_author=Gwendoline Duong;,citation_author=Nicolas Spilmont;,citation_author=François Gevaert;,citation_publication_date=2022;,citation_cover_date=2022;,citation_year=2022;,citation_issue=2;,citation_volume=14;,citation_journal_title=Remote Sensing;,citation_publisher=MDPI;">
+<meta name="citation_reference" content="citation_title=Monitoring vegetation systems in the great plains with ERTS;,citation_author=John Wilson Rouse;,citation_author=Rüdiger H Haas;,citation_author=John A Schell;,citation_author=Donald W Deering;,citation_author=others;,citation_publication_date=1974;,citation_cover_date=1974;,citation_year=1974;,citation_fulltext_html_url=https://ntrs.nasa.gov/citations/19740022614;,citation_issue=1;,citation_volume=351;,citation_journal_title=NASA Spec. Publ;">
+<meta name="citation_reference" content="citation_title=Spatially located platform and aerial photography for documentation of grazing impacts on wheat;,citation_author=Mounir Louhaichi;,citation_author=Michael M Borman;,citation_author=Douglas E Johnson;,citation_publication_date=2001;,citation_cover_date=2001;,citation_year=2001;,citation_issue=1;,citation_volume=16;,citation_journal_title=Geocarto International;,citation_publisher=Taylor &amp;amp;amp; Francis;">
+<meta name="citation_reference" content="citation_title=heatwaveR: A central algorithm for the detection of heatwaves and cold-spells;,citation_author=Robert W. Schlegel;,citation_author=Albertus J. Smit;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_issue=27;,citation_doi=10.21105/joss.00821;,citation_volume=3;,citation_journal_title=Journal of Open Source Software;">
+<meta name="citation_reference" content="citation_title=Categorizing and naming marine heatwaves;,citation_author=Alistair J Hobday;,citation_author=Eric CJ Oliver;,citation_author=Alex Sen Gupta;,citation_author=Jessica A Benthuysen;,citation_author=Michael T Burrows;,citation_author=Markus G Donat;,citation_author=Neil J Holbrook;,citation_author=Pippa J Moore;,citation_author=Mads S Thomsen;,citation_author=Thomas Wernberg;,citation_author=others;,citation_publication_date=2018;,citation_cover_date=2018;,citation_year=2018;,citation_issue=2;,citation_volume=31;,citation_journal_title=Oceanography;,citation_publisher=JSTOR;">
+</head>
+
+<body class="quarto-light">
+
+<header id="title-block-header" class="quarto-title-block default toc-left page-columns page-full">
+  <div class="quarto-title-banner page-columns page-full">
+    <div class="quarto-title column-body">
+      <h1 class="title">SWISS: Shallow-Water Inversion for Satellite Sensors</h1>
+          </div>
+
+    
+    <div class="quarto-title-meta-container">
+      <div class="quarto-title-meta-column-start">
+            <div class="quarto-title-meta-author">
+          <div class="quarto-title-meta-heading">Authors</div>
+          <div class="quarto-title-meta-heading">Affiliations</div>
+          
+                <div class="quarto-title-meta-contents">
+            <p class="author">Simon Oiry <a href="mailto:oirysimon@gmail.com" class="quarto-title-author-email"><i class="bi bi-envelope"></i></a> <a href="https://orcid.org/0000-0001-7161-5246" class="quarto-title-author-orcid"> <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAA2ZpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDUuMC1jMDYwIDYxLjEzNDc3NywgMjAxMC8wMi8xMi0xNzozMjowMCAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDo1N0NEMjA4MDI1MjA2ODExOTk0QzkzNTEzRjZEQTg1NyIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDozM0NDOEJGNEZGNTcxMUUxODdBOEVCODg2RjdCQ0QwOSIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDozM0NDOEJGM0ZGNTcxMUUxODdBOEVCODg2RjdCQ0QwOSIgeG1wOkNyZWF0b3JUb29sPSJBZG9iZSBQaG90b3Nob3AgQ1M1IE1hY2ludG9zaCI+IDx4bXBNTTpEZXJpdmVkRnJvbSBzdFJlZjppbnN0YW5jZUlEPSJ4bXAuaWlkOkZDN0YxMTc0MDcyMDY4MTE5NUZFRDc5MUM2MUUwNEREIiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOjU3Q0QyMDgwMjUyMDY4MTE5OTRDOTM1MTNGNkRBODU3Ii8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+84NovQAAAR1JREFUeNpiZEADy85ZJgCpeCB2QJM6AMQLo4yOL0AWZETSqACk1gOxAQN+cAGIA4EGPQBxmJA0nwdpjjQ8xqArmczw5tMHXAaALDgP1QMxAGqzAAPxQACqh4ER6uf5MBlkm0X4EGayMfMw/Pr7Bd2gRBZogMFBrv01hisv5jLsv9nLAPIOMnjy8RDDyYctyAbFM2EJbRQw+aAWw/LzVgx7b+cwCHKqMhjJFCBLOzAR6+lXX84xnHjYyqAo5IUizkRCwIENQQckGSDGY4TVgAPEaraQr2a4/24bSuoExcJCfAEJihXkWDj3ZAKy9EJGaEo8T0QSxkjSwORsCAuDQCD+QILmD1A9kECEZgxDaEZhICIzGcIyEyOl2RkgwAAhkmC+eAm0TAAAAABJRU5ErkJggg=="></a></p>
+          </div>
+                <div class="quarto-title-meta-contents">
+                    <p class="affiliation">
+                        Institut des Substances et Organismes de la Mer, ISOMer, Nantes Université, UR 2160, F-44000 Nantes, France
+                      </p>
+                    <p class="affiliation">
+                        Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 34149 Trieste, Italy
+                      </p>
+                  </div>
+                      <div class="quarto-title-meta-contents">
+            <p class="author">Maria Laura Zoffoli <a href="https://orcid.org/0000-0003-1892-0051" class="quarto-title-author-orcid"> <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAA2ZpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDUuMC1jMDYwIDYxLjEzNDc3NywgMjAxMC8wMi8xMi0xNzozMjowMCAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDo1N0NEMjA4MDI1MjA2ODExOTk0QzkzNTEzRjZEQTg1NyIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDozM0NDOEJGNEZGNTcxMUUxODdBOEVCODg2RjdCQ0QwOSIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDozM0NDOEJGM0ZGNTcxMUUxODdBOEVCODg2RjdCQ0QwOSIgeG1wOkNyZWF0b3JUb29sPSJBZG9iZSBQaG90b3Nob3AgQ1M1IE1hY2ludG9zaCI+IDx4bXBNTTpEZXJpdmVkRnJvbSBzdFJlZjppbnN0YW5jZUlEPSJ4bXAuaWlkOkZDN0YxMTc0MDcyMDY4MTE5NUZFRDc5MUM2MUUwNEREIiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOjU3Q0QyMDgwMjUyMDY4MTE5OTRDOTM1MTNGNkRBODU3Ii8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+84NovQAAAR1JREFUeNpiZEADy85ZJgCpeCB2QJM6AMQLo4yOL0AWZETSqACk1gOxAQN+cAGIA4EGPQBxmJA0nwdpjjQ8xqArmczw5tMHXAaALDgP1QMxAGqzAAPxQACqh4ER6uf5MBlkm0X4EGayMfMw/Pr7Bd2gRBZogMFBrv01hisv5jLsv9nLAPIOMnjy8RDDyYctyAbFM2EJbRQw+aAWw/LzVgx7b+cwCHKqMhjJFCBLOzAR6+lXX84xnHjYyqAo5IUizkRCwIENQQckGSDGY4TVgAPEaraQr2a4/24bSuoExcJCfAEJihXkWDj3ZAKy9EJGaEo8T0QSxkjSwORsCAuDQCD+QILmD1A9kECEZgxDaEZhICIzGcIyEyOl2RkgwAAhkmC+eAm0TAAAAABJRU5ErkJggg=="></a></p>
+          </div>
+                <div class="quarto-title-meta-contents">
+                    <p class="affiliation">
+                        Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 34149 Trieste, Italy
+                      </p>
+                  </div>
+                      <div class="quarto-title-meta-contents">
+            <p class="author">Giuliana Profeti </p>
+          </div>
+                <div class="quarto-title-meta-contents">
+                    <p class="affiliation">
+                        Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 30122 Venezia, Italy
+                      </p>
+                  </div>
+                      <div class="quarto-title-meta-contents">
+            <p class="author">Vittorio Brando <a href="https://orcid.org/0000-0002-2193-5695" class="quarto-title-author-orcid"> <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAA2ZpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDUuMC1jMDYwIDYxLjEzNDc3NywgMjAxMC8wMi8xMi0xNzozMjowMCAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDo1N0NEMjA4MDI1MjA2ODExOTk0QzkzNTEzRjZEQTg1NyIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDozM0NDOEJGNEZGNTcxMUUxODdBOEVCODg2RjdCQ0QwOSIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDozM0NDOEJGM0ZGNTcxMUUxODdBOEVCODg2RjdCQ0QwOSIgeG1wOkNyZWF0b3JUb29sPSJBZG9iZSBQaG90b3Nob3AgQ1M1IE1hY2ludG9zaCI+IDx4bXBNTTpEZXJpdmVkRnJvbSBzdFJlZjppbnN0YW5jZUlEPSJ4bXAuaWlkOkZDN0YxMTc0MDcyMDY4MTE5NUZFRDc5MUM2MUUwNEREIiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOjU3Q0QyMDgwMjUyMDY4MTE5OTRDOTM1MTNGNkRBODU3Ii8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+84NovQAAAR1JREFUeNpiZEADy85ZJgCpeCB2QJM6AMQLo4yOL0AWZETSqACk1gOxAQN+cAGIA4EGPQBxmJA0nwdpjjQ8xqArmczw5tMHXAaALDgP1QMxAGqzAAPxQACqh4ER6uf5MBlkm0X4EGayMfMw/Pr7Bd2gRBZogMFBrv01hisv5jLsv9nLAPIOMnjy8RDDyYctyAbFM2EJbRQw+aAWw/LzVgx7b+cwCHKqMhjJFCBLOzAR6+lXX84xnHjYyqAo5IUizkRCwIENQQckGSDGY4TVgAPEaraQr2a4/24bSuoExcJCfAEJihXkWDj3ZAKy9EJGaEo8T0QSxkjSwORsCAuDQCD+QILmD1A9kECEZgxDaEZhICIzGcIyEyOl2RkgwAAhkmC+eAm0TAAAAABJRU5ErkJggg=="></a></p>
+          </div>
+                <div class="quarto-title-meta-contents">
+                    <p class="affiliation">
+                        Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 00133 Rome, Italy
+                      </p>
+                  </div>
+                    </div>
+        
+        <div class="quarto-title-meta">
+
+                      
+                <div>
+            <div class="quarto-title-meta-heading">Published</div>
+            <div class="quarto-title-meta-contents">
+              <p class="date">April 17, 2026</p>
+            </div>
+          </div>
+          
+                
+              </div>
+      </div>
+      <div class="quarto-title-meta-column-end quarto-other-formats-target">
+      <div class="quarto-alternate-formats"><div class="quarto-title-meta-heading">Other Formats</div><div class="quarto-title-meta-contents"><p><a href="SWAMPy_Paper.docx"><i class="bi bi-file-word"></i>MS Word</a></p></div></div></div>
+    </div>
+
+    <div>
+      <div class="abstract">
+        <div class="block-title">Abstract</div>
+        -
+      </div>
+    </div>
+
+    <div>
+      <div class="keywords">
+        <div class="block-title">Keywords</div>
+        <p>To be written</p>
+      </div>
+    </div>
+
+    <div class="quarto-other-links-text-target">
+    </div>  </div>
+</header><div id="quarto-content" class="page-columns page-rows-contents page-layout-article toc-left">
+<div id="quarto-sidebar-toc-left" class="sidebar toc-left">
+  
+</div>
+<div id="quarto-margin-sidebar" class="sidebar margin-sidebar zindex-bottom">
+</div>
+<main class="content quarto-banner-title-block" id="quarto-document-content">
+
+
+
+  
+
+
+
+
+<div id="quarto-appendix" class="default"><section class="quarto-appendix-contents" id="quarto-citation"><h2 class="anchored quarto-appendix-heading">Citation</h2><div><div class="quarto-appendix-secondary-label">BibTeX citation:</div><pre class="sourceCode code-with-copy quarto-appendix-bibtex"><code class="sourceCode bibtex">@online{oiry2026,
+  author = {Oiry, Simon and Laura Zoffoli, Maria and Profeti, Giuliana
+    and Brando, Vittorio},
+  title = {SWISS: {Shallow-Water} {Inversion} for {Satellite} {Sensors}},
+  date = {2026-04-17},
+  langid = {en},
+  abstract = {-}
+}
+</code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre><div class="quarto-appendix-secondary-label">For attribution, please cite this work as:</div><div id="ref-oiry2026" class="csl-entry quarto-appendix-citeas" role="listitem">
+Oiry, S., Laura Zoffoli, M., Profeti, G., Brando, V., 2026. SWISS:
+Shallow-Water Inversion for Satellite Sensors [WWW Document].
+Environmental Modelling &amp; Software.
+</div></div></section></div></main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

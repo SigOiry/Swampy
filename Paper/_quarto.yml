@@ -1,0 +1,22 @@
+project:
+  type: manuscript
+  output-dir: ../docs
+  post-render:
+    - python postprocess_docx_affiliations.py
+manuscript: 
+  article: index.qmd
+format:
+  html: 
+    toc: true
+    theme: cosmo
+  docx:
+    output-file: "SWAMPy_Paper"
+    reference-doc: quarto_template.docx
+render: 
+  - "index.qmd"
+resources:
+  - "!*.qmd"
+  - "!*.ipynb"
+  - "!*.out.ipynb"
+  - "!*.embed.ipynb"
+bibliography: library.bib

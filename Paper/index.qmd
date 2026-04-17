@@ -1,0 +1,56 @@
+---
+title: "SWISS: Shallow-Water Inversion for Satellite Sensors"
+shorttitle: To be written
+author:
+  - name: Simon Oiry
+    orcid: 0000-0001-7161-5246
+    corresponding: true
+    email: oirysimon@gmail.com
+    roles:
+      - Investigation
+      - Writing
+      - Data acquisition
+    affiliations:
+      - Institut des Substances et Organismes de la Mer, ISOMer, Nantes Université, UR 2160, F-44000 Nantes, France
+      - Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 34149 Trieste, Italy
+  - name: Maria Laura Zoffoli
+    orcid: 0000-0003-1892-0051
+    corresponding: false
+    roles: 
+      - Data acquisition
+      - Revision
+    affiliations:
+      - Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 34149 Trieste, Italy
+  - name: Giuliana Profeti
+    corresponding: false
+    roles: 
+      - Data acquisition
+      - Revision
+    affiliations:
+      - Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 30122 Venezia, Italy
+  - name: Vittorio Brando
+    orcid: 0000-0002-2193-5695
+    corresponding: false
+    roles: 
+      - Data acquisition
+      - Revision
+    affiliations:
+      - Consiglio Nazionale delle Ricerche, Istituto di Scienze Marine (CNR-ISMAR), 00133 Rome, Italy
+keywords:
+  - To be written
+abstract:
+  "-"
+plain-language-summary: |
+  To be written
+key-points:
+  - To be written
+date: last-modified
+citation:
+  container-title: Environmental Modelling & Software
+number-sections: true
+notebook-links: false
+editor_options: 
+  chunk_output_type: console
+csl: RSE.csl
+---
+
