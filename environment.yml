@@ -10,6 +10,8 @@ dependencies:
   - netcdf4
   - rasterio
   - fiona
+  - shapely
+  - pyproj
   - spectral
   - pillow
   - dicttoxml

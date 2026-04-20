@@ -12,6 +12,19 @@ import webview
 def _load_vector_mask_geometries(path):
     import fiona
     from rasterio.warp import transform_geom
+    from shapely.geometry import mapping, shape
+    from shapely.ops import transform as shapely_transform
+    from pyproj import Transformer
+
+    def _transform_with_optional_point_buffer(geometry, src_crs, dst_crs, point_buffer_m=10.0):
+        geom_type = str(geometry.get("type") or "")
+        if geom_type in {"Point", "MultiPoint"}:
+            source_geom = shape(geometry)
+            to_metric = Transformer.from_crs(src_crs, "EPSG:3857", always_xy=True)
+            to_target = Transformer.from_crs("EPSG:3857", dst_crs, always_xy=True)
+            buffered_geom = shapely_transform(to_metric.transform, source_geom).buffer(float(point_buffer_m))
+            return mapping(shapely_transform(to_target.transform, buffered_geom))
+        return transform_geom(src_crs, dst_crs, geometry, precision=8)
 
     geometries = []
     with fiona.open(path, "r") as src:
@@ -22,10 +35,10 @@ def _load_vector_mask_geometries(path):
             geometry = feature.get("geometry")
             if not geometry:
                 continue
-            transformed = transform_geom(src_crs, "EPSG:4326", geometry, precision=8)
+            transformed = _transform_with_optional_point_buffer(geometry, src_crs, "EPSG:4326")
             geometries.append(transformed)
     if not geometries:
-        raise RuntimeError("The shapefile does not contain any valid polygon geometry.")
+        raise RuntimeError("The shapefile does not contain any valid geometry.")
     return geometries
 
 
@@ -72,13 +85,17 @@ class CropWindowApi:
 
 def _build_html(payload):
     payload_json = json.dumps(payload)
+    mode = str(payload.get("mode", "crop") or "crop")
+    needs_leaflet_draw = (mode == "polygons") or bool(payload.get("allow_polygon")) or bool(payload.get("enable_edit_toolbar"))
+    leaflet_draw_css = '<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">' if needs_leaflet_draw else ''
+    leaflet_draw_js = '<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>' if needs_leaflet_draw else ''
     return f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>{payload.get("title", "Spatial selection")}</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
+  {leaflet_draw_css}
   <style>
     html, body {{
       margin: 0;
@@ -225,13 +242,14 @@ def _build_html(payload):
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  {leaflet_draw_js}
   <script>
     const payload = {payload_json};
     const mode = String(payload.mode || 'crop');
     const allowRectangle = mode === 'crop' || payload.allow_rectangle === true;
     const allowPolygons = mode === 'polygons' || payload.allow_polygon === true;
     const allowMaskImport = payload.allow_mask_import !== false && mode === 'crop';
+    const hasLeafletDraw = typeof L.Draw !== 'undefined' && L.Draw && L.Draw.Event;
     let currentBBox = payload.selection && payload.selection.bbox ? payload.selection.bbox : null;
     let currentMaskPath = payload.selection && payload.selection.mask_path ? payload.selection.mask_path : '';
     let currentMaskGeometries = payload.selection && payload.selection.mask_geometries ? payload.selection.mask_geometries : [];
@@ -440,31 +458,33 @@ def _build_html(payload):
       formatSummary();
     }}
 
-    map.on(L.Draw.Event.CREATED, function(event) {{
-      const layer = event.layer;
-      if (event.layerType === 'polygon') {{
-        polygonGroup.addLayer(layer);
-        polygonsFromGroup();
-      }}
-    }});
+    if (hasLeafletDraw) {{
+      map.on(L.Draw.Event.CREATED, function(event) {{
+        const layer = event.layer;
+        if (event.layerType === 'polygon') {{
+          polygonGroup.addLayer(layer);
+          polygonsFromGroup();
+        }}
+      }});
 
-    map.on(L.Draw.Event.EDITED, function() {{
-      if (allowRectangle && rectangleGroup.getLayers().length) {{
-        const rectLayer = rectangleGroup.getLayers()[0];
-        currentBBox = bboxFromLeaflet(rectLayer.getBounds());
-      }}
-      if (allowPolygons) {{
-        polygonsFromGroup();
-      }}
-    }});
+      map.on(L.Draw.Event.EDITED, function() {{
+        if (allowRectangle && rectangleGroup.getLayers().length) {{
+          const rectLayer = rectangleGroup.getLayers()[0];
+          currentBBox = bboxFromLeaflet(rectLayer.getBounds());
+        }}
+        if (allowPolygons) {{
+          polygonsFromGroup();
+        }}
+      }});
 
-    map.on(L.Draw.Event.DELETED, function() {{
-      if (!rectangleGroup.getLayers().length) {{
-        currentBBox = null;
-      }}
-      polygonsFromGroup();
-      formatSummary();
-    }});
+      map.on(L.Draw.Event.DELETED, function() {{
+        if (!rectangleGroup.getLayers().length) {{
+          currentBBox = null;
+        }}
+        polygonsFromGroup();
+        formatSummary();
+      }});
+    }}
 
     map.on('click', function(event) {{
       if (!rectangleDrawActive || !allowRectangle) {{
@@ -519,6 +539,10 @@ def _build_html(payload):
     }});
 
     document.getElementById('draw-poly-btn').addEventListener('click', function() {{
+      if (!hasLeafletDraw) {{
+        window.alert('Polygon drawing tools are not available in this window.');
+        return;
+      }}
       const drawer = new L.Draw.Polygon(map, {{
         allowIntersection: false,
         showArea: false,
@@ -563,7 +587,7 @@ def _build_html(payload):
       document.getElementById('clear-poly-btn').style.display = allowPolygons ? '' : 'none';
       document.getElementById('import-mask-btn').style.display = allowMaskImport ? '' : 'none';
       document.getElementById('clear-mask-btn').style.display = allowMaskImport ? '' : 'none';
-      if (payload.enable_edit_toolbar) {{
+      if (payload.enable_edit_toolbar && hasLeafletDraw) {{
         new L.Control.Draw({{
           draw: false,
           edit: {{
@@ -675,7 +699,10 @@ def main():
         height=860,
         min_size=(900, 680),
     )
-    webview.start()
+    try:
+        webview.start(gui='edgechromium', debug=False)
+    except Exception:
+        webview.start(debug=False)
 
     with open(response_path, "w", encoding="utf-8") as response_file:
         json.dump(api.result, response_file)

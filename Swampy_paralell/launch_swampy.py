@@ -585,6 +585,19 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im, gr
         import fiona
         from rasterio.features import geometry_mask
         from rasterio.warp import transform_geom
+        from shapely.geometry import mapping, shape
+        from shapely.ops import transform as shapely_transform
+        from pyproj import Transformer
+
+        def _transform_with_optional_point_buffer(geometry, src_crs, dst_crs, point_buffer_m=10.0):
+            geom_type = str(geometry.get('type') or '')
+            if geom_type in {'Point', 'MultiPoint'}:
+                source_geom = shape(geometry)
+                to_metric = Transformer.from_crs(src_crs, 'EPSG:3857', always_xy=True)
+                to_target = Transformer.from_crs('EPSG:3857', dst_crs, always_xy=True)
+                buffered_geom = shapely_transform(to_metric.transform, source_geom).buffer(float(point_buffer_m))
+                return mapping(shapely_transform(to_target.transform, buffered_geom))
+            return transform_geom(src_crs, dst_crs, geometry, precision=8)
 
         local_grid_metadata = _subset_grid_metadata(
             grid_metadata,
@@ -610,7 +623,7 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im, gr
                 geometry = feature.get('geometry')
                 if not geometry:
                     continue
-                geometries.append(transform_geom(src_crs, crs.to_string(), geometry, precision=8))
+                geometries.append(_transform_with_optional_point_buffer(geometry, src_crs, crs.to_string()))
         if not geometries:
             raise RuntimeError("The shapefile mask does not contain any valid geometry.")
         shape_mask = geometry_mask(

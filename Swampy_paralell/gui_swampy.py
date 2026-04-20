@@ -564,6 +564,19 @@ def _prepare_preview_coordinate_grids(variables, height, width):
 def _load_vector_mask_geometries(path):
     import fiona
     from rasterio.warp import transform_geom
+    from shapely.geometry import mapping, shape
+    from shapely.ops import transform as shapely_transform
+    from pyproj import Transformer
+
+    def _transform_with_optional_point_buffer(geometry, src_crs, dst_crs, point_buffer_m=10.0):
+        geom_type = str(geometry.get("type") or "")
+        if geom_type in {"Point", "MultiPoint"}:
+            source_geom = shape(geometry)
+            to_metric = Transformer.from_crs(src_crs, "EPSG:3857", always_xy=True)
+            to_target = Transformer.from_crs("EPSG:3857", dst_crs, always_xy=True)
+            buffered_geom = shapely_transform(to_metric.transform, source_geom).buffer(float(point_buffer_m))
+            return mapping(shapely_transform(to_target.transform, buffered_geom))
+        return transform_geom(src_crs, dst_crs, geometry, precision=8)
 
     geometries = []
     with fiona.open(path, 'r') as src:
@@ -574,10 +587,10 @@ def _load_vector_mask_geometries(path):
             geometry = feature.get('geometry')
             if not geometry:
                 continue
-            transformed = transform_geom(src_crs, "EPSG:4326", geometry, precision=8)
+            transformed = _transform_with_optional_point_buffer(geometry, src_crs, "EPSG:4326")
             geometries.append(transformed)
     if not geometries:
-        raise RuntimeError("The shapefile does not contain any valid polygon geometry.")
+        raise RuntimeError("The shapefile does not contain any valid geometry.")
     return geometries
 
 
