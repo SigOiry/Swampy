@@ -265,6 +265,9 @@ def _build_html(payload):
     const polygonGroup = new L.FeatureGroup().addTo(map);
     let maskLayer = null;
     let startupReleased = false;
+    let rectangleDrawActive = false;
+    let rectangleStartLatLng = null;
+    let rectangleDraftLayer = null;
 
     function setInteractionEnabled(enabled) {{
       const idsToToggle = [
@@ -352,6 +355,38 @@ def _build_html(payload):
       formatSummary();
     }}
 
+    function clearRectangleDraft() {{
+      if (rectangleDraftLayer) {{
+        map.removeLayer(rectangleDraftLayer);
+        rectangleDraftLayer = null;
+      }}
+      rectangleStartLatLng = null;
+    }}
+
+    function setRectangleDrawMode(enabled) {{
+      rectangleDrawActive = !!enabled;
+      const mapContainer = map.getContainer();
+      const drawButton = document.getElementById('draw-rect-btn');
+      if (drawButton) {{
+        if (rectangleDrawActive) {{
+          drawButton.classList.add('primary');
+          drawButton.textContent = rectangleStartLatLng ? 'Click opposite corner...' : 'Click first corner...';
+        }} else {{
+          drawButton.classList.remove('primary');
+          drawButton.textContent = 'Draw rectangle';
+        }}
+      }}
+      if (mapContainer) {{
+        mapContainer.style.cursor = rectangleDrawActive ? 'crosshair' : '';
+      }}
+      if (!rectangleDrawActive) {{
+        clearRectangleDraft();
+        if (startupReleased) {{
+          map.dragging.enable();
+        }}
+      }}
+    }}
+
     function polygonsFromGroup() {{
       const geometries = [];
       polygonGroup.eachLayer(function(layer) {{
@@ -407,10 +442,7 @@ def _build_html(payload):
 
     map.on(L.Draw.Event.CREATED, function(event) {{
       const layer = event.layer;
-      if (event.layerType === 'rectangle') {{
-        const bbox = bboxFromLeaflet(layer.getBounds());
-        setRectangle(bbox);
-      }} else if (event.layerType === 'polygon') {{
+      if (event.layerType === 'polygon') {{
         polygonGroup.addLayer(layer);
         polygonsFromGroup();
       }}
@@ -434,17 +466,55 @@ def _build_html(payload):
       formatSummary();
     }});
 
+    map.on('click', function(event) {{
+      if (!rectangleDrawActive || !allowRectangle) {{
+        return;
+      }}
+      if (!rectangleStartLatLng) {{
+        rectangleStartLatLng = event.latlng;
+        clearRectangleDraft();
+        rectangleStartLatLng = event.latlng;
+        rectangleDraftLayer = L.rectangle(
+          [rectangleStartLatLng, rectangleStartLatLng],
+          {{
+            color: '#ff3366',
+            weight: 2,
+            fill: false,
+            interactive: false
+          }}
+        ).addTo(map);
+        map.dragging.disable();
+        setRectangleDrawMode(true);
+        return;
+      }}
+      finishRectangleDrag(event.latlng);
+    }});
+
+    map.on('mousemove', function(event) {{
+      if (!rectangleDrawActive || !rectangleStartLatLng || !rectangleDraftLayer) {{
+        return;
+      }}
+      rectangleDraftLayer.setBounds(L.latLngBounds(rectangleStartLatLng, event.latlng));
+    }});
+
+    function finishRectangleDrag(latlng) {{
+      if (!rectangleDrawActive || !rectangleStartLatLng) {{
+        return;
+      }}
+      const finalBounds = L.latLngBounds(rectangleStartLatLng, latlng);
+      setRectangle(bboxFromLeaflet(finalBounds));
+      setRectangleDrawMode(false);
+      if (startupReleased) {{
+        map.dragging.enable();
+      }}
+    }}
+
     document.getElementById('draw-rect-btn').addEventListener('click', function() {{
-      const drawer = new L.Draw.Rectangle(map, {{
-        shapeOptions: {{
-          color: '#ff3366',
-          weight: 2
-        }}
-      }});
-      drawer.enable();
+      setRectangleDrawMode(!rectangleDrawActive);
     }});
 
     document.getElementById('clear-rect-btn').addEventListener('click', function() {{
+      setRectangleDrawMode(false);
       setRectangle(null);
     }});
 

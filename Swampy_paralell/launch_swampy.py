@@ -4221,14 +4221,6 @@ if __name__ == "__main__":
                     depth_for_plan = ma.masked_array(correction_recorder.depth, mask=(correction_recorder.success < 1))
                     sdi_for_plan = ma.masked_array(correction_recorder.sdi, mask=(correction_recorder.success < 1))
                     error_for_plan = ma.masked_array(correction_recorder.error_alpha_f, mask=(correction_recorder.success < 1))
-                    slope_before = _compute_depth_slope_percent(
-                        depth_for_plan,
-                        lat_for_correction,
-                        lon_for_correction,
-                        shape_geo_for_correction,
-                        dx_m=dx_m,
-                        dy_m=dy_m,
-                    )
                     try:
                         dx_m, dy_m = _derive_pixel_spacing_meters(
                             lat_for_correction,
@@ -4237,6 +4229,14 @@ if __name__ == "__main__":
                         )
                     except Exception:
                         dx_m, dy_m = np.nan, np.nan
+                    slope_before = _compute_depth_slope_percent(
+                        depth_for_plan,
+                        lat_for_correction,
+                        lon_for_correction,
+                        shape_geo_for_correction,
+                        dx_m=dx_m,
+                        dy_m=dy_m,
+                    )
                     correction_plan = None
                     extra_confident_mask = np.zeros((height, width), dtype=bool)
                     rerun_wave = 0
