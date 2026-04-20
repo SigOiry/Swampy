@@ -589,7 +589,7 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im, gr
         from shapely.ops import transform as shapely_transform
         from pyproj import Transformer
 
-        def _transform_with_optional_point_buffer(geometry, src_crs, dst_crs, point_buffer_m=10.0):
+        def _transform_with_optional_point_buffer(geometry, src_crs, dst_crs, point_buffer_m=50.0):
             geom_type = str(geometry.get('type') or '')
             if geom_type in {'Point', 'MultiPoint'}:
                 source_geom = shape(geometry)
