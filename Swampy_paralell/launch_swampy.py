@@ -218,7 +218,7 @@ from datetime import datetime
 from multiprocessing import cpu_count
 import rasterio
 from scipy import ndimage
-from rasterio.transform import from_bounds
+from rasterio.transform import from_bounds, Affine
 from rasterio.crs import CRS
 from rasterio.windows import Window
 
@@ -493,7 +493,7 @@ def _apply_saved_sensor_band_mapping(rrs, saved_mapping, current_band_labels, cu
     return aligned, sensor_centers
 
 
-def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im):
+def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im, grid_metadata=None):
     """Apply geographic crop and optional shapefile mask to reflectance and coordinates."""
     if not crop_selection:
         return rrs, lat_array, lon_array
@@ -512,6 +512,12 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im):
     cropped_lat = lat_grid
     cropped_lon = lon_grid
     selection_mask = np.isfinite(cropped_lat) & np.isfinite(cropped_lon)
+    crop_window = {
+        'row_start': 0,
+        'row_end': int(cropped_rrs.shape[1]),
+        'col_start': 0,
+        'col_end': int(cropped_rrs.shape[2]),
+    }
 
     bbox = crop_selection.get('bbox')
     if bbox:
@@ -529,6 +535,12 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im):
         rows, cols = np.where(bbox_mask)
         row_start, row_end = int(rows.min()), int(rows.max()) + 1
         col_start, col_end = int(cols.min()), int(cols.max()) + 1
+        crop_window = {
+            'row_start': row_start,
+            'row_end': row_end,
+            'col_start': col_start,
+            'col_end': col_end,
+        }
         cropped_rrs = cropped_rrs[:, row_start:row_end, col_start:col_end]
         cropped_lat = cropped_lat[row_start:row_end, col_start:col_end]
         cropped_lon = cropped_lon[row_start:row_end, col_start:col_end]
@@ -542,12 +554,20 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im):
         from rasterio.features import geometry_mask
         from rasterio.warp import transform_geom
 
+        local_grid_metadata = _subset_grid_metadata(
+            grid_metadata,
+            crop_window.get('row_start', 0),
+            crop_window.get('row_end'),
+            crop_window.get('col_start', 0),
+            crop_window.get('col_end'),
+        ) if grid_metadata else None
         transform, crs = _derive_transform_crs(
             int(cropped_rrs.shape[2]),
             int(cropped_rrs.shape[1]),
             cropped_lat,
             cropped_lon,
             2,
+            local_grid_metadata,
         )
         geometries = []
         with fiona.open(mask_path, 'r') as src:
@@ -574,7 +594,7 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im):
             )
 
     cropped_rrs[:, ~selection_mask] = np.nan
-    return cropped_rrs, cropped_lat, cropped_lon
+    return cropped_rrs, cropped_lat, cropped_lon, crop_window
 
 
 def _suggest_chunk_rows(height, width, target_pixels=_SPLIT_TARGET_PIXELS, min_rows=_SPLIT_MIN_ROWS):
@@ -699,6 +719,207 @@ def _load_coordinate_variable(nc_vars, primary_names, std_names=('latitude',)):
             except Exception:
                 continue
     return None, None
+
+
+def _load_axis_coordinate_variable(nc_vars, primary_names, std_names=(), expected_length=None):
+    """Return (name, 1D array) for a projected x/y coordinate variable."""
+    for cand in primary_names:
+        if cand in nc_vars:
+            try:
+                data = np.asarray(nc_vars[cand][:])
+                if data.ndim == 1 and (expected_length is None or data.shape[0] == expected_length):
+                    return cand, data
+            except Exception:
+                continue
+    for var_name, var in nc_vars.items():
+        if getattr(var, 'ndim', None) != 1:
+            continue
+        std_name = getattr(var, 'standard_name', '').lower() if hasattr(var, 'standard_name') else ''
+        if std_name in std_names:
+            try:
+                data = np.asarray(var[:])
+                if expected_length is None or data.shape[0] == expected_length:
+                    return var_name, data
+            except Exception:
+                continue
+    return None, None
+
+
+def _median_regular_step(values):
+    values = np.asarray(values, dtype='float64').ravel()
+    if values.size < 2:
+        return None
+    diffs = np.diff(values)
+    diffs = diffs[np.isfinite(diffs)]
+    if diffs.size == 0:
+        return None
+    step = float(np.median(diffs))
+    if not np.isfinite(step) or np.isclose(step, 0.0):
+        return None
+    atol = max(abs(step), 1.0) * 1e-6
+    if not np.allclose(diffs, step, atol=atol, rtol=1e-6):
+        return None
+    return step
+
+
+def _transform_from_center_coords(x_coords, y_coords):
+    """Build an affine transform from 1D centre coordinates."""
+    x_coords = np.asarray(x_coords, dtype='float64').ravel()
+    y_coords = np.asarray(y_coords, dtype='float64').ravel()
+    if x_coords.size < 2 or y_coords.size < 2:
+        return None
+    dx = _median_regular_step(x_coords)
+    dy = _median_regular_step(y_coords)
+    if dx is None or dy is None:
+        return None
+    return Affine(dx, 0.0, float(x_coords[0]) - dx / 2.0,
+                  0.0, dy, float(y_coords[0]) - dy / 2.0)
+
+
+def _extract_regular_lonlat_center_axes(lat, lon, shape_geo):
+    """Return 1D lon/lat centre axes when a geographic grid is rectilinear."""
+    lat = np.asarray(lat, dtype='float64')
+    lon = np.asarray(lon, dtype='float64')
+    if shape_geo == 1 and lat.ndim == 1 and lon.ndim == 1:
+        return lon, lat
+    if shape_geo != 2 or lat.ndim != 2 or lon.ndim != 2 or lat.shape != lon.shape:
+        return None, None
+    lon_axis = lon[0, :]
+    lat_axis = lat[:, 0]
+    lon_residual = np.nanmax(np.abs(lon - lon_axis[np.newaxis, :]))
+    lat_residual = np.nanmax(np.abs(lat - lat_axis[:, np.newaxis]))
+    if not np.isfinite(lon_residual) or not np.isfinite(lat_residual):
+        return None, None
+    if lon_residual > 1e-6 or lat_residual > 1e-6:
+        return None, None
+    return lon_axis, lat_axis
+
+
+def _extract_input_grid_metadata(source_product, width, height, sample_var_name=None):
+    """Extract exact grid metadata from the input NetCDF when available."""
+    metadata = {
+        'transform': None,
+        'crs': None,
+        'x_coords': None,
+        'y_coords': None,
+        'x_name': None,
+        'y_name': None,
+        'grid_mapping_name': None,
+    }
+    try:
+        nc_vars = source_product.variables
+    except Exception:
+        return metadata
+
+    x_name, x_coords = _load_axis_coordinate_variable(
+        nc_vars,
+        ('x', 'X'),
+        ('projection_x_coordinate',),
+        expected_length=width,
+    )
+    y_name, y_coords = _load_axis_coordinate_variable(
+        nc_vars,
+        ('y', 'Y'),
+        ('projection_y_coordinate',),
+        expected_length=height,
+    )
+    if x_coords is not None and y_coords is not None:
+        metadata['x_name'] = x_name
+        metadata['y_name'] = y_name
+        metadata['x_coords'] = np.asarray(x_coords, dtype='float32')
+        metadata['y_coords'] = np.asarray(y_coords, dtype='float32')
+
+    grid_mapping_name = None
+    if sample_var_name and sample_var_name in nc_vars:
+        grid_mapping_name = getattr(nc_vars[sample_var_name], 'grid_mapping', None)
+    if not grid_mapping_name:
+        for candidate in nc_vars.values():
+            grid_mapping_name = getattr(candidate, 'grid_mapping', None)
+            if grid_mapping_name:
+                break
+    metadata['grid_mapping_name'] = grid_mapping_name
+
+    crs = None
+    if grid_mapping_name and grid_mapping_name in nc_vars:
+        grid_var = nc_vars[grid_mapping_name]
+        for attr_name in ('crs_wkt', 'spatial_ref'):
+            value = getattr(grid_var, attr_name, None)
+            if not value:
+                continue
+            try:
+                crs = CRS.from_wkt(str(value))
+                break
+            except Exception:
+                try:
+                    crs = CRS.from_string(str(value))
+                    break
+                except Exception:
+                    pass
+        if crs is None:
+            cf_dict = {}
+            for attr_name in getattr(grid_var, 'ncattrs', lambda: [])():
+                value = getattr(grid_var, attr_name, None)
+                if isinstance(value, np.ndarray):
+                    if value.ndim == 0:
+                        value = value.item()
+                    else:
+                        continue
+                if isinstance(value, (np.generic,)):
+                    value = value.item()
+                cf_dict[attr_name] = value
+            try:
+                crs = CRS.from_cf(cf_dict)
+            except Exception:
+                pass
+
+    if crs is None:
+        for attr_name in ('proj4_string', 'scene_proj4_string'):
+            if attr_name in getattr(source_product, 'ncattrs', lambda: [])():
+                value = getattr(source_product, attr_name, None)
+                if value:
+                    try:
+                        crs = CRS.from_string(str(value))
+                        break
+                    except Exception:
+                        pass
+
+    metadata['crs'] = crs
+
+    if metadata['x_coords'] is not None and metadata['y_coords'] is not None:
+        metadata['transform'] = _transform_from_center_coords(
+            metadata['x_coords'],
+            metadata['y_coords'],
+        )
+
+    return metadata
+
+
+def _subset_grid_metadata(grid_metadata, row_start=0, row_end=None, col_start=0, col_end=None):
+    """Return source-grid metadata for a rectangular row/column subset."""
+    if not grid_metadata:
+        return grid_metadata
+
+    subset = dict(grid_metadata)
+    x_coords = subset.get('x_coords')
+    y_coords = subset.get('y_coords')
+
+    if x_coords is not None:
+        x_coords = np.asarray(x_coords)
+        subset['x_coords'] = x_coords[col_start:col_end].copy()
+    if y_coords is not None:
+        y_coords = np.asarray(y_coords)
+        subset['y_coords'] = y_coords[row_start:row_end].copy()
+
+    transform = subset.get('transform')
+    if transform is not None:
+        subset['transform'] = transform * Affine.translation(col_start, row_start)
+
+    if subset.get('x_coords') is not None and subset.get('y_coords') is not None:
+        exact_transform = _transform_from_center_coords(subset['x_coords'], subset['y_coords'])
+        if exact_transform is not None:
+            subset['transform'] = exact_transform
+
+    return subset
 
 
 def _identify_spectral_axis(dim_names, shape):
@@ -834,11 +1055,36 @@ def _compute_chunk_substrate_norms(chunk_arrays, relaxed, substrate_var_names, f
     }
 
 
-def _derive_transform_crs(width, height, lat, lon, shape_geo):
+def _derive_transform_crs(width, height, lat, lon, shape_geo, grid_metadata=None):
     """Derive an affine transform and CRS for GeoTIFF from lat/lon.
     Assumes geographic WGS84 and a regular grid.
     """
     try:
+        if grid_metadata:
+            exact_transform = grid_metadata.get('transform')
+            exact_crs = grid_metadata.get('crs')
+            if exact_transform is not None and exact_crs is not None:
+                return exact_transform, exact_crs
+            if grid_metadata.get('x_coords') is not None and grid_metadata.get('y_coords') is not None:
+                derived_transform = _transform_from_center_coords(
+                    grid_metadata['x_coords'],
+                    grid_metadata['y_coords'],
+                )
+                if derived_transform is not None:
+                    if exact_crs is None:
+                        raise RuntimeError("Exact input grid coordinates are available, but CRS information is missing.")
+                    return derived_transform, exact_crs
+
+        lon_axis, lat_axis = _extract_regular_lonlat_center_axes(lat, lon, shape_geo)
+        if lon_axis is not None and lat_axis is not None:
+            transform = _transform_from_center_coords(lon_axis, lat_axis)
+            if transform is not None:
+                try:
+                    crs = CRS.from_epsg(4326)
+                except Exception:
+                    crs = CRS.from_proj4('+proj=longlat +datum=WGS84 +no_defs')
+                return transform, crs
+
         if shape_geo == 2:
             lon_min = float(np.nanmin(lon))
             lon_max = float(np.nanmax(lon))
@@ -2016,8 +2262,9 @@ def _write_netcdf_from_chunks(chunk_manifest, ofile, dim_list, height, width, nb
 
 
 def _write_geotiff_from_chunks(chunk_manifest, tif_path, width, height, lat, lon, shape_geo,
-                               primary_var_defs, substrate_var_names, relaxed, fully_relaxed=False):
-    transform, crs = _derive_transform_crs(width, height, lat, lon, shape_geo)
+                               primary_var_defs, substrate_var_names, relaxed, fully_relaxed=False,
+                               grid_metadata=None):
+    transform, crs = _derive_transform_crs(width, height, lat, lon, shape_geo, grid_metadata)
     count = len(primary_var_defs)
     bx = (min(width, 256) // 16) * 16
     by = (min(height, 256) // 16) * 16
@@ -2111,8 +2358,9 @@ def _write_single_chunk_netcdf(path, primary_outputs, dim_list, row_count, width
     nc_o.close()
 
 
-def _write_single_chunk_geotiff(path, primary_outputs, lat_slice, lon_slice, shape_geo, width, row_count):
-    transform, crs = _derive_transform_crs(width, row_count, lat_slice, lon_slice, shape_geo)
+def _write_single_chunk_geotiff(path, primary_outputs, lat_slice, lon_slice, shape_geo, width, row_count,
+                                grid_metadata=None):
+    transform, crs = _derive_transform_crs(width, row_count, lat_slice, lon_slice, shape_geo, grid_metadata)
     bands = []
     for var_name, data, display_name in primary_outputs:
         label = display_name or var_name
@@ -2122,7 +2370,8 @@ def _write_single_chunk_geotiff(path, primary_outputs, lat_slice, lon_slice, sha
 
 def _write_chunk_outputs(chunk_manifest, ofile, output_format, dim_list, width, nbands,
                          lat, lon, wls, name_lat, name_lon, name_w, shape_geo,
-                         primary_var_defs, substrate_var_names, relaxed, fully_relaxed=False, cleanup_paths=None):
+                         primary_var_defs, substrate_var_names, relaxed, fully_relaxed=False, cleanup_paths=None,
+                         grid_metadata=None):
     """Write per-chunk outputs matching the user-selected format."""
     if not chunk_manifest or not ofile:
         return
@@ -2170,7 +2419,16 @@ def _write_chunk_outputs(chunk_manifest, ofile, output_format, dim_list, width, 
         if output_format in ("geotiff", "both"):
             if lat_slice is not None and lon_slice is not None:
                 tif_path = chunk_base + '.tif'
-                _write_single_chunk_geotiff(tif_path, primary_outputs, lat_slice, lon_slice, shape_geo, width, row_count)
+                chunk_grid_metadata = _subset_grid_metadata(grid_metadata, row_start, row_end, 0, width) if grid_metadata else None
+                _write_single_chunk_geotiff(
+                    tif_path,
+                    primary_outputs,
+                    lat_slice,
+                    lon_slice,
+                    shape_geo,
+                    width,
+                    row_count,
+                    chunk_grid_metadata)
                 if cleanup_paths is not None:
                     cleanup_paths.append(tif_path)
             elif not warn_geotiff_latlon:
@@ -2215,7 +2473,7 @@ def _write_direct_netcdf(ofile, dim_list, height, width, nbands,
 
 
 def _write_direct_geotiff(ofile, width, height, lat_data, lon_data, shape_geo_val,
-                          primary_outputs):
+                          primary_outputs, grid_metadata=None):
     if not primary_outputs:
         print("[WARN]: No primary outputs available for GeoTIFF export.")
         return
@@ -2224,14 +2482,14 @@ def _write_direct_geotiff(ofile, width, height, lat_data, lon_data, shape_geo_va
         return
     base, _ = os.path.splitext(ofile)
     tif_path = base + '.tif'
-    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val)
+    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
     bands = [(display_name, ma.array(data)) for _, data, display_name in primary_outputs]
     _write_geotiff(tif_path, bands, transform, crs, height, width, nodata=OUTPUT_FILL_VALUE)
 
 
 def _export_outputs_legacy(ofile, output_format, dim_list, height, width, nbands,
                            lat_data, lon_data, wls, lat_name, lon_name, w_name,
-                           shape_geo_val, primary_outputs):
+                           shape_geo_val, primary_outputs, grid_metadata=None):
     if output_format in ("netcdf", "both"):
         _write_direct_netcdf(
             ofile,
@@ -2254,13 +2512,14 @@ def _export_outputs_legacy(ofile, output_format, dim_list, height, width, nbands
             lat_data,
             lon_data,
             shape_geo_val,
-            primary_outputs)
+            primary_outputs,
+            grid_metadata)
 
 
 def _export_outputs_modern(ofile, output_format, chunk_manifest, dim_list, height, width, nbands,
                            lat_data, lon_data, wls, lat_name, lon_name, w_name,
                            shape_geo_val, primary_outputs, primary_var_defs,
-                           substrate_var_names, relaxed, fully_relaxed=False):
+                           substrate_var_names, relaxed, fully_relaxed=False, grid_metadata=None):
     if output_format in ("netcdf", "both"):
         if chunk_manifest:
             _write_netcdf_from_chunks(
@@ -2311,7 +2570,8 @@ def _export_outputs_modern(ofile, output_format, chunk_manifest, dim_list, heigh
                         primary_var_defs,
                         substrate_var_names,
                         relaxed,
-                        fully_relaxed=fully_relaxed)
+                        fully_relaxed=fully_relaxed,
+                        grid_metadata=grid_metadata)
                 except Exception as e:
                     print(f"[ERROR]: Failed to write chunked GeoTIFF '{ofile}': {e}")
             else:
@@ -2325,7 +2585,8 @@ def _export_outputs_modern(ofile, output_format, chunk_manifest, dim_list, heigh
                     lat_data,
                     lon_data,
                     shape_geo_val,
-                    primary_outputs)
+                    primary_outputs,
+                    grid_metadata)
             except Exception as e:
                 print(f"[ERROR]: Failed to write GeoTIFF '{ofile}': {e}")
 def _extract_substrate_labels(siop_dict, expected=3):
@@ -2516,27 +2777,29 @@ def _write_modeled_reflectance_netcdf_from_chunks(chunk_manifest, path, dim_list
 
 
 def _write_modeled_reflectance_geotiff(path, cube, width, height, lat_data, lon_data,
-                                       shape_geo_val, wavelengths, nbands, above_rrs_flag):
+                                       shape_geo_val, wavelengths, nbands, above_rrs_flag,
+                                       grid_metadata=None):
     if lat_data is None or lon_data is None:
         print("[WARN]: Skipping modeled reflectance GeoTIFF export: lat/lon not available to derive georeferencing.")
         return
     cube_band_first = _cube_to_band_first(cube, nbands)
     cube_export = _convert_modeled_reflectance_for_export(cube_band_first, above_rrs_flag)
-    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val)
+    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
     band_labels = _build_spectral_band_labels(wavelengths, 'Modeled reflectance', nbands)
     bands = [(band_labels[index], cube_export[index, :, :]) for index in range(nbands)]
     _write_geotiff(path, bands, transform, crs, height, width, nodata=OUTPUT_FILL_VALUE)
 
 
 def _write_modeled_reflectance_geotiff_from_chunks(chunk_manifest, path, width, height, lat_data, lon_data,
-                                                   shape_geo_val, wavelengths, nbands, above_rrs_flag):
+                                                   shape_geo_val, wavelengths, nbands, above_rrs_flag,
+                                                   grid_metadata=None):
     if not chunk_manifest:
         return
     if lat_data is None or lon_data is None:
         print("[WARN]: Skipping modeled reflectance GeoTIFF export: lat/lon not available to derive georeferencing.")
         return
 
-    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val)
+    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
     band_labels = _build_spectral_band_labels(wavelengths, 'Modeled reflectance', nbands)
     bx = (min(width, 256) // 16) * 16
     by = (min(height, 256) // 16) * 16
@@ -2577,7 +2840,7 @@ def _write_modeled_reflectance_geotiff_from_chunks(chunk_manifest, path, width, 
 
 def _write_modeled_reflectance_outputs(ofile, cube, dim_list, height, width, nbands,
                                        lat_data, lon_data, wavelengths, lat_name, lon_name, w_name,
-                                       shape_geo_val, above_rrs_flag):
+                                       shape_geo_val, above_rrs_flag, grid_metadata=None):
     if cube is None:
         return
     base, _ = os.path.splitext(ofile)
@@ -2608,12 +2871,13 @@ def _write_modeled_reflectance_outputs(ofile, cube, dim_list, height, width, nba
         shape_geo_val,
         wavelengths,
         nbands,
-        above_rrs_flag)
+        above_rrs_flag,
+        grid_metadata)
 
 
 def _write_modeled_reflectance_outputs_from_chunks(chunk_manifest, ofile, dim_list, height, width, nbands,
                                                    lat_data, lon_data, wavelengths, lat_name, lon_name, w_name,
-                                                   shape_geo_val, above_rrs_flag):
+                                                   shape_geo_val, above_rrs_flag, grid_metadata=None):
     if not chunk_manifest:
         return
     base, _ = os.path.splitext(ofile)
@@ -2644,11 +2908,12 @@ def _write_modeled_reflectance_outputs_from_chunks(chunk_manifest, ofile, dim_li
         shape_geo_val,
         wavelengths,
         nbands,
-        above_rrs_flag)
+        above_rrs_flag,
+        grid_metadata)
 
 
 def _write_initial_guess_geotiff(ofile, initial_guess_stack, width, height,
-                                 lat_data, lon_data, shape_geo_val, band_names):
+                                 lat_data, lon_data, shape_geo_val, band_names, grid_metadata=None):
     if initial_guess_stack is None:
         return
     if lat_data is None or lon_data is None:
@@ -2660,13 +2925,13 @@ def _write_initial_guess_geotiff(ofile, initial_guess_stack, width, height,
         return
     base, _ = os.path.splitext(ofile)
     tif_path = base + '_initial_guesses.tif'
-    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val)
+    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
     bands = [(band_name, stack[:, :, index]) for index, band_name in enumerate(band_names)]
     _write_geotiff(tif_path, bands, transform, crs, height, width, nodata=OUTPUT_FILL_VALUE)
 
 
 def _write_initial_guess_geotiff_from_chunks(chunk_manifest, ofile, width, height,
-                                             lat_data, lon_data, shape_geo_val, band_names):
+                                             lat_data, lon_data, shape_geo_val, band_names, grid_metadata=None):
     if not chunk_manifest:
         return
     if lat_data is None or lon_data is None:
@@ -2675,7 +2940,7 @@ def _write_initial_guess_geotiff_from_chunks(chunk_manifest, ofile, width, heigh
 
     base, _ = os.path.splitext(ofile)
     tif_path = base + '_initial_guesses.tif'
-    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val)
+    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
     count = len(band_names)
     bx = (min(width, 256) // 16) * 16
     by = (min(height, 256) // 16) * 16
@@ -2825,10 +3090,11 @@ def _build_result_recorder_from_outputs(height, width, sensor_filter, nedr, fixe
     return result_recorder
 
 
-def _write_false_deep_debug_geotiffs(ofile, width, height, lat_data, lon_data, shape_geo_val, debug_layers):
+def _write_false_deep_debug_geotiffs(ofile, width, height, lat_data, lon_data, shape_geo_val, debug_layers,
+                                     grid_metadata=None):
     if lat_data is None or lon_data is None or not debug_layers:
         return
-    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val)
+    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
     base, _ = os.path.splitext(ofile)
     for suffix, layer_name, layer_data in debug_layers:
         tif_path = base + suffix
@@ -2842,7 +3108,8 @@ def _write_false_deep_debug_geotiffs(ofile, width, height, lat_data, lon_data, s
             nodata=OUTPUT_FILL_VALUE)
 
 
-def _write_slope_geotiff(ofile, depth_data, width, height, lat_data, lon_data, shape_geo_val):
+def _write_slope_geotiff(ofile, depth_data, width, height, lat_data, lon_data, shape_geo_val,
+                         grid_metadata=None):
     """Write a single-band slope GeoTIFF computed from retrieved depth."""
     if depth_data is None:
         return
@@ -2853,7 +3120,7 @@ def _write_slope_geotiff(ofile, depth_data, width, height, lat_data, lon_data, s
     slope = _compute_depth_slope_percent(depth_data, lat_data, lon_data, shape_geo_val)
     base, _ = os.path.splitext(ofile)
     tif_path = base + '_slope.tif'
-    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val)
+    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
     _write_geotiff(tif_path, [('slope_percent', slope)], transform, crs, height, width, nodata=OUTPUT_FILL_VALUE)
 
 
@@ -3296,18 +3563,40 @@ if __name__ == "__main__":
             lat_array = lat_grid
             lon_array = lon_grid
 
+            grid_reference_var_name = None
+            if name_rrs and name_rrs in source_product.variables:
+                grid_reference_var_name = name_rrs
+            elif single_band_layers:
+                first_layer_name = single_band_layers[0].get('name')
+                if first_layer_name in source_product.variables:
+                    grid_reference_var_name = first_layer_name
+            source_grid_metadata = _extract_input_grid_metadata(
+                source_product,
+                width,
+                height,
+                sample_var_name=grid_reference_var_name,
+            )
+
             if crop_selection:
-                rrs, lat_array, lon_array = _apply_crop_selection(
+                rrs, lat_array, lon_array, crop_window = _apply_crop_selection(
                     rrs,
                     lat_array,
                     lon_array,
                     crop_selection,
                     file_im,
+                    source_grid_metadata,
                 )
                 height = int(rrs.shape[1])
                 width = int(rrs.shape[2])
                 lat_grid = lat_array
                 lon_grid = lon_array
+                source_grid_metadata = _subset_grid_metadata(
+                    source_grid_metadata,
+                    crop_window.get('row_start', 0),
+                    crop_window.get('row_end'),
+                    crop_window.get('col_start', 0),
+                    crop_window.get('col_end'),
+                )
                 message_parts = []
                 bbox = crop_selection.get('bbox')
                 if bbox:
@@ -3332,6 +3621,7 @@ if __name__ == "__main__":
                 'legacy_mode': rotated_input_mode,
                 'legacy_lat': legacy_lat,
                 'legacy_lon': legacy_lon,
+                'grid_metadata': source_grid_metadata,
             }
 
             # Sensor filter
@@ -3354,6 +3644,7 @@ if __name__ == "__main__":
             image_info['legacy_output_mode'] = geo_metadata.get('legacy_mode', False)
             image_info['legacy_lat'] = geo_metadata.get('legacy_lat')
             image_info['legacy_lon'] = geo_metadata.get('legacy_lon')
+            image_info['grid_metadata'] = geo_metadata.get('grid_metadata')
             algo = main_sambuca_snap.main_sambuca()
 
             # initialize the rrs array
@@ -3377,7 +3668,8 @@ if __name__ == "__main__":
                         height,
                         lat_array,
                         lon_array,
-                        shape_geo if shape_geo is not None else 2)
+                        shape_geo if shape_geo is not None else 2,
+                        geo_metadata.get('grid_metadata'))
 
                     with rasterio.open(bathy_path) as src:
                         # use float32 dest buffer
@@ -3793,6 +4085,7 @@ if __name__ == "__main__":
             lon_name = name_lon or image_info.get('lon_name', 'lon')
             w_name = name_w or 'wavelength'
             shape_geo_val = shape_geo if shape_geo is not None else image_info.get('shape_geo', 2)
+            grid_metadata = image_info.get('grid_metadata')
 
             if chunk_manifest and not legacy_mode:
                     _write_chunk_outputs(
@@ -3813,7 +4106,8 @@ if __name__ == "__main__":
                         substrate_var_names,
                         relaxed,
                         fully_relaxed=fully_relaxed,
-                        cleanup_paths=chunk_export_paths)
+                        cleanup_paths=chunk_export_paths,
+                        grid_metadata=grid_metadata)
 
             if legacy_mode:
                 _export_outputs_legacy(
@@ -3830,7 +4124,8 @@ if __name__ == "__main__":
                     lon_name,
                     w_name,
                     shape_geo_val,
-                    primary_outputs)
+                    primary_outputs,
+                    grid_metadata=grid_metadata)
             else:
                 _export_outputs_modern(
                     ofile,
@@ -3851,7 +4146,8 @@ if __name__ == "__main__":
                     primary_var_defs,
                     substrate_var_names,
                     relaxed,
-                    fully_relaxed=fully_relaxed)
+                    fully_relaxed=fully_relaxed,
+                    grid_metadata=grid_metadata)
 
             if correction_debug_layers:
                 try:
@@ -3863,6 +4159,7 @@ if __name__ == "__main__":
                         lon_data,
                         shape_geo_val,
                         correction_debug_layers,
+                        grid_metadata=grid_metadata,
                     )
                 except Exception as e:
                     print(f"[ERROR]: Failed to write false-deep correction debug GeoTIFFs '{ofile}': {e}")
@@ -3878,7 +4175,8 @@ if __name__ == "__main__":
                             lat_data,
                             lon_data,
                             shape_geo_val,
-                            initial_guess_band_names)
+                            initial_guess_band_names,
+                            grid_metadata=grid_metadata)
                     except Exception as e:
                         print(f"[ERROR]: Failed to write initial guess debug GeoTIFF '{ofile}': {e}")
                 else:
@@ -3891,7 +4189,8 @@ if __name__ == "__main__":
                             lat_data,
                             lon_data,
                             shape_geo_val,
-                            initial_guess_band_names)
+                            initial_guess_band_names,
+                            grid_metadata=grid_metadata)
                     except Exception as e:
                         print(f"[ERROR]: Failed to write initial guess debug GeoTIFF '{ofile}': {e}")
 
@@ -3912,7 +4211,8 @@ if __name__ == "__main__":
                             lon_name,
                             w_name,
                             shape_geo_val,
-                            above_rrs_flag)
+                            above_rrs_flag,
+                            grid_metadata=grid_metadata)
                     else:
                         _write_modeled_reflectance_outputs(
                             ofile,
@@ -3928,7 +4228,8 @@ if __name__ == "__main__":
                             lon_name,
                             w_name,
                             shape_geo_val,
-                            above_rrs_flag)
+                            above_rrs_flag,
+                            grid_metadata=grid_metadata)
                 except Exception as e:
                     print(f"[ERROR]: Failed to write modeled reflectance outputs '{ofile}': {e}")
 
@@ -4002,7 +4303,13 @@ if __name__ == "__main__":
                         tif_p = ofile[:-3] + '_' + key + '.tif'
                         if lat_data is not None and lon_data is not None:
                             try:
-                                transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val)
+                                transform, crs = _derive_transform_crs(
+                                    width,
+                                    height,
+                                    lat_data,
+                                    lon_data,
+                                    shape_geo_val,
+                                    grid_metadata)
                                 arr = ma.array(var)
                                 if arr.ndim != 3:
                                     arr = arr.reshape((height, width, -1))
