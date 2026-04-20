@@ -19,7 +19,6 @@ except Exception:
     # tqdm not available; provide a no-op fallback
     def tqdm(iterable, total=None):
         return iterable
-import copy
 from  alewriter import AleWriter
 from sambuca.error import error_all
 
@@ -64,6 +63,60 @@ _WORKER_OPTIMIZE_INITIAL_GUESSES = False
 _WORKER_USE_FIVE_INITIAL_GUESSES = False
 _WORKER_RELAXED = False
 _WORKER_FULLY_RELAXED = False
+_SPAWN_START_METHOD_READY = False
+
+
+def _configure_worker_process_environment():
+    """Limit threaded math libraries inside worker processes."""
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['NUMEXPR_NUM_THREADS'] = '1'
+
+
+def _ensure_spawn_start_method():
+    """Set multiprocessing start method to spawn once per interpreter."""
+    global _SPAWN_START_METHOD_READY
+    if _SPAWN_START_METHOD_READY:
+        return
+    try:
+        set_start_method("spawn")
+    except RuntimeError:
+        # Another part of the process may have set the start method already.
+        pass
+    _SPAWN_START_METHOD_READY = True
+
+
+def _create_worker_pool(objective, p0, opt_met, bounds, cons, shallow,
+                        bathy_tolerance, optimize_initial_guesses,
+                        use_five_initial_guesses, relaxed, fully_relaxed,
+                        free_cpu=0, max_tasks=None):
+    """Create a worker pool configured for pixel-wise optimization."""
+    _configure_worker_process_environment()
+    _ensure_spawn_start_method()
+    workers = max(1, cpu_count() - free_cpu)
+    if max_tasks is not None:
+        try:
+            workers = min(workers, max(1, int(max_tasks)))
+        except Exception:
+            pass
+    return ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=worker_init,
+        initargs=(
+            objective,
+            p0,
+            opt_met,
+            bounds,
+            cons,
+            shallow,
+            bathy_tolerance,
+            optimize_initial_guesses,
+            use_five_initial_guesses,
+            relaxed,
+            fully_relaxed,
+        ),
+    )
 _WORKER_SUBSTRATE_STARTS = (
     [1/3, 1/3, 1/3],
     [0.8, 0.1, 0.1],
@@ -720,18 +773,27 @@ def output_calculation(observed_rrs, objective, siop, result_recorder, image_inf
     # Limit BLAS/OpenMP threads to 1 per worker before spawning child processes.
     # Child processes inherit these env vars, preventing N_workers × N_BLAS_threads
     # memory blow-up that causes "OpenBLAS error: Memory allocation still failed".
-    os.environ['OPENBLAS_NUM_THREADS'] = '1'
-    os.environ['MKL_NUM_THREADS'] = '1'
-    os.environ['OMP_NUM_THREADS'] = '1'
-    os.environ['NUMEXPR_NUM_THREADS'] = '1'
+    _configure_worker_process_environment()
 
     print("Setting start method to spawn")
-    set_start_method("spawn", force=True)
+    _ensure_spawn_start_method()
     print("Starting multiprocessing minimize...")
 
     # Initialize worker processes with shared large objects to avoid pickling them per-task
-    workers = max(1, cpu_count() - free_cpu)
-    with ProcessPoolExecutor(max_workers=workers, initializer=worker_init, initargs=(objective, p0, opt_met, siop['p_bounds'], cons, shallow, bathy_tol, optimize_initial_guesses, use_five_initial_guesses, relaxed, fully_relaxed)) as pool:
+    with _create_worker_pool(
+        objective,
+        p0,
+        opt_met,
+        siop['p_bounds'],
+        cons,
+        shallow,
+        bathy_tol,
+        optimize_initial_guesses,
+        use_five_initial_guesses,
+        relaxed,
+        fully_relaxed,
+        free_cpu=free_cpu,
+    ) as pool:
         # Use generator and tqdm on the futures iterator to avoid building large lists
         mapped = pool.map(minimize_pixel, pixel_arg_generator(), chunksize=200)
         for res in tqdm(mapped, total=(xend - xstart) * (yend - ystart)):
@@ -792,7 +854,8 @@ def rerun_selected_pixels(observed_rrs, objective, siop, result_recorder, pixel_
                           apply_shallow_adjustment=False,
                           allow_target_sum_over_one=False,
                           normalise_target_fractions=False,
-                          fully_relaxed=False):
+                          fully_relaxed=False,
+                          executor=None):
     """Re-optimise only a selected subset of pixels with depth constraints.
 
     Args:
@@ -831,23 +894,6 @@ def rerun_selected_pixels(observed_rrs, objective, siop, result_recorder, pixel_
     if not pixel_constraints:
         return result_recorder
 
-    p0 = (np.array(siop['p_max']) + np.array(siop['p_min'])) / 2
-    p0[3] = 10 ** ((math.log10(np.array(siop['p_max'][3])) + math.log10(np.array(siop['p_min'][3]))) / 2)
-    if not relaxed:
-        p0[4:7] = 1.0 / 3.0
-
-    if allow_target_sum_over_one or fully_relaxed:
-        cons = ()
-    elif relaxed:
-        cons = (
-            {'type': 'ineq', 'fun': constraint_upper_relaxed, 'jac': constraint_upper_relaxed_jac},
-            {'type': 'ineq', 'fun': constraint_lower_relaxed, 'jac': constraint_lower_relaxed_jac}
-        )
-    else:
-        cons = (
-            {'type': 'eq', 'fun': constraint_sum_to_one, 'jac': constraint_sum_to_one_jac},
-        )
-
     def pixel_arg_generator():
         for item in pixel_constraints:
             p0_override = None
@@ -883,31 +929,26 @@ def rerun_selected_pixels(observed_rrs, objective, siop, result_recorder, pixel_
                 bounds_override,
             )
 
-    os.environ['OPENBLAS_NUM_THREADS'] = '1'
-    os.environ['MKL_NUM_THREADS'] = '1'
-    os.environ['OMP_NUM_THREADS'] = '1'
-    os.environ['NUMEXPR_NUM_THREADS'] = '1'
-
-    set_start_method("spawn", force=True)
-    workers = max(1, cpu_count() - free_cpu)
-    with ProcessPoolExecutor(
-        max_workers=workers,
-        initializer=worker_init,
-        initargs=(
+    _configure_worker_process_environment()
+    own_executor = executor is None
+    if own_executor:
+        executor = create_rerun_worker_pool(
             objective,
-            p0,
+            siop,
             opt_met,
-            siop['p_bounds'],
-            cons,
-            apply_shallow_adjustment,
-            bathy_tolerance,
-            optimize_initial_guesses,
-            use_five_initial_guesses,
             relaxed,
-            fully_relaxed,
-        ),
-    ) as pool:
-        mapped = pool.map(minimize_pixel, pixel_arg_generator(), chunksize=100)
+            fully_relaxed=fully_relaxed,
+            free_cpu=free_cpu,
+            bathy_tolerance=bathy_tolerance,
+            optimize_initial_guesses=optimize_initial_guesses,
+            use_five_initial_guesses=use_five_initial_guesses,
+            apply_shallow_adjustment=apply_shallow_adjustment,
+            allow_target_sum_over_one=allow_target_sum_over_one,
+            max_tasks=len(pixel_constraints),
+        )
+
+    try:
+        mapped = executor.map(minimize_pixel, pixel_arg_generator(), chunksize=100)
         for res in tqdm(mapped, total=len(pixel_constraints)):
             x, y, success, nit, result_x, obs_rrs, initial_guess = res
             if initial_guess is not None and getattr(result_recorder, 'initial_guess_stack', None) is not None:
@@ -928,4 +969,56 @@ def rerun_selected_pixels(observed_rrs, objective, siop, result_recorder, pixel_
                     result_x,
                     nit,
                     success)
+    finally:
+        if own_executor and executor is not None:
+            executor.shutdown()
     return result_recorder
+
+
+def _build_rerun_setup(siop, relaxed, fully_relaxed, allow_target_sum_over_one):
+    p0 = (np.array(siop['p_max']) + np.array(siop['p_min'])) / 2
+    p0[3] = 10 ** ((math.log10(np.array(siop['p_max'][3])) + math.log10(np.array(siop['p_min'][3]))) / 2)
+    if not relaxed:
+        p0[4:7] = 1.0 / 3.0
+
+    if allow_target_sum_over_one or fully_relaxed:
+        cons = ()
+    elif relaxed:
+        cons = (
+            {'type': 'ineq', 'fun': constraint_upper_relaxed, 'jac': constraint_upper_relaxed_jac},
+            {'type': 'ineq', 'fun': constraint_lower_relaxed, 'jac': constraint_lower_relaxed_jac}
+        )
+    else:
+        cons = (
+            {'type': 'eq', 'fun': constraint_sum_to_one, 'jac': constraint_sum_to_one_jac},
+        )
+    return p0, cons
+
+
+def create_rerun_worker_pool(objective, siop, opt_met, relaxed, fully_relaxed=False,
+                             free_cpu=0, bathy_tolerance=None,
+                             optimize_initial_guesses=False, use_five_initial_guesses=False,
+                             apply_shallow_adjustment=False,
+                             allow_target_sum_over_one=False,
+                             max_tasks=None):
+    p0, cons = _build_rerun_setup(
+        siop,
+        relaxed,
+        fully_relaxed,
+        allow_target_sum_over_one,
+    )
+    return _create_worker_pool(
+        objective,
+        p0,
+        opt_met,
+        siop['p_bounds'],
+        cons,
+        apply_shallow_adjustment,
+        bathy_tolerance,
+        optimize_initial_guesses,
+        use_five_initial_guesses,
+        relaxed,
+        fully_relaxed,
+        free_cpu=free_cpu,
+        max_tasks=max_tasks,
+    )

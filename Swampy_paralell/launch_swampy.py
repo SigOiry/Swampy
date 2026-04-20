@@ -19,12 +19,13 @@ to calculate additional spectra and parameters.
 
 """
 import glob
+import csv
+import json
 import os, sys
 import re
 import shutil
 import sqlite3
 import tempfile
-import copy
 
 sys.path.insert(0, os.getcwd())
 
@@ -203,6 +204,7 @@ _configure_geospatial_runtime()
 
 import numpy as np
 import numpy.ma as ma
+from scipy.optimize import minimize as scipy_minimize
 import main_sambuca_snap
 import output_calculation
 import define_outputs
@@ -218,6 +220,7 @@ from datetime import datetime
 from multiprocessing import cpu_count
 import rasterio
 from scipy import ndimage
+from scipy.spatial import cKDTree
 from rasterio.transform import from_bounds, Affine
 from rasterio.crs import CRS
 from rasterio.windows import Window
@@ -361,6 +364,35 @@ def _parse_crop_selection(config_root):
     return {
         'bbox': bbox,
         'mask_path': mask_path,
+    }
+
+
+def _parse_deep_water_selection(config_root):
+    """Return a validated deep-water polygon selection from XML/log settings, or None."""
+    if not config_root or not _coerce_bool(config_root.get('deep_water_enabled', False), False):
+        return None
+    polygons_raw = config_root.get('deep_water_polygons_json', '[]')
+    try:
+        if isinstance(polygons_raw, (list, tuple)):
+            polygons = list(polygons_raw)
+        else:
+            polygons = json.loads(str(polygons_raw))
+    except Exception:
+        return None
+    valid_polygons = []
+    for geometry in polygons:
+        if not isinstance(geometry, dict):
+            continue
+        geom_type = str(geometry.get('type') or '')
+        coordinates = geometry.get('coordinates')
+        if geom_type in ('Polygon', 'MultiPolygon') and coordinates:
+            valid_polygons.append(geometry)
+    if not valid_polygons:
+        return None
+    return {
+        'polygons': valid_polygons,
+        'use_sd_bounds': _coerce_bool(config_root.get('deep_water_use_sd_bounds', False), False),
+        'source_image': str(config_root.get('deep_water_source_image', '') or ''),
     }
 
 
@@ -595,6 +627,170 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im, gr
 
     cropped_rrs[:, ~selection_mask] = np.nan
     return cropped_rrs, cropped_lat, cropped_lon, crop_window
+
+
+def _rasterize_epsg4326_geometries(geometries, lat_array, lon_array, grid_metadata=None):
+    if not geometries:
+        return None
+    from rasterio.features import geometry_mask
+    from rasterio.warp import transform_geom
+
+    lat_grid = np.asarray(lat_array, dtype='float32')
+    lon_grid = np.asarray(lon_array, dtype='float32')
+    if lat_grid.ndim == 1 and lon_grid.ndim == 1:
+        lon_grid, lat_grid = np.meshgrid(lon_grid, lat_grid)
+    transform, crs = _derive_transform_crs(
+        int(lon_grid.shape[1]),
+        int(lat_grid.shape[0]),
+        lat_grid,
+        lon_grid,
+        2,
+        grid_metadata,
+    )
+    raster_geometries = geometries
+    try:
+        if crs is not None:
+            crs_text = crs.to_string() if hasattr(crs, 'to_string') else str(crs)
+            if crs_text and str(crs_text).strip().lower() not in {'epsg:4326', 'ogc:crs84'}:
+                raster_geometries = [
+                    transform_geom('EPSG:4326', crs_text, geometry, precision=8)
+                    for geometry in geometries
+                ]
+    except Exception:
+        raster_geometries = geometries
+    mask = geometry_mask(
+        raster_geometries,
+        out_shape=(int(lat_grid.shape[0]), int(lon_grid.shape[1])),
+        transform=transform,
+        invert=True,
+    )
+    return np.asarray(mask, dtype=bool)
+
+
+def _deep_water_modelled_rrs(objective, chl, cdom, nap):
+    a = objective._a_water + (float(chl) * objective._a_ph_star) + (float(cdom) * objective._a_cdom_star) + (float(nap) * objective._a_nap_star)
+    bb = objective._bb_water + (float(chl) * objective._bb_ph_star) + (float(nap) * objective._bb_nap_star)
+    kappa = np.clip(a + bb, 1.0e-12, None)
+    u = bb / kappa
+    rrsdp = (0.084 + 0.17 * u) * u
+    return objective._filter_spectrum(rrsdp)
+
+
+def _deep_water_alpha_f(observed_rrs, modelled_rrs, weights):
+    observed_rrs = np.asarray(observed_rrs, dtype=float)
+    modelled_rrs = np.asarray(modelled_rrs, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    observed_weighted = weights * observed_rrs
+    observed_sum_weighted = np.clip(np.sum(observed_weighted), 1.0e-12, None)
+    observed_norm = np.sqrt(np.clip(np.sum(observed_weighted * observed_rrs), 1.0e-24, None))
+    residual = modelled_rrs - observed_rrs
+    residual_weighted = weights * residual
+    residual_norm = np.sqrt(np.clip(np.sum(residual_weighted * residual), 1.0e-24, None))
+    modelled_weighted = weights * modelled_rrs
+    model_norm = np.sqrt(np.clip(np.sum(modelled_weighted * modelled_rrs), 1.0e-24, None))
+    weighted_dot = np.sum(observed_weighted * modelled_rrs)
+    cosine = weighted_dot / np.clip(model_norm * observed_norm, 1.0e-24, None)
+    cosine = np.clip(cosine, 0.0, 1.0)
+    alpha = np.arccos(cosine)
+    lsq = residual_norm / observed_sum_weighted
+    return float(alpha * lsq)
+
+
+def _estimate_deep_water_pixel(objective, observed_rrs, chl_bounds, cdom_bounds, nap_bounds):
+    observed_rrs = np.asarray(observed_rrs, dtype=float)
+    if observed_rrs.ndim != 1 or np.isnan(observed_rrs).any() or np.allclose(observed_rrs, 0):
+        return None
+
+    lower = np.array([float(chl_bounds[0]), float(cdom_bounds[0]), float(nap_bounds[0])], dtype=float)
+    upper = np.array([float(chl_bounds[1]), float(cdom_bounds[1]), float(nap_bounds[1])], dtype=float)
+    midpoint = 0.5 * (lower + upper)
+    lower_mid = 0.5 * (lower + midpoint)
+    upper_mid = 0.5 * (midpoint + upper)
+    starts = [midpoint, lower_mid, upper_mid]
+
+    def objective_func(x):
+        modeled = _deep_water_modelled_rrs(objective, x[0], x[1], x[2])
+        return _deep_water_alpha_f(observed_rrs, modeled, objective._weights)
+
+    best = None
+    for start in starts:
+        try:
+            res = scipy_minimize(
+                objective_func,
+                x0=np.asarray(start, dtype=float),
+                method='L-BFGS-B',
+                bounds=[tuple(chl_bounds), tuple(cdom_bounds), tuple(nap_bounds)],
+                options={'maxiter': 120},
+            )
+        except Exception:
+            continue
+        if best is None or float(res.fun) < float(best.fun):
+            best = res
+
+    if best is None or best.x is None:
+        return None
+    modeled = _deep_water_modelled_rrs(objective, best.x[0], best.x[1], best.x[2])
+    return {
+        'chl': float(best.x[0]),
+        'cdom': float(best.x[1]),
+        'nap': float(best.x[2]),
+        'error_alpha_f': float(_deep_water_alpha_f(observed_rrs, modeled, objective._weights)),
+        'success': bool(getattr(best, 'success', False)),
+    }
+
+
+def _apply_deep_water_priors(siop, estimates, use_sd_bounds):
+    if not estimates:
+        return None
+    chl_vals = np.array([item['chl'] for item in estimates], dtype=float)
+    cdom_vals = np.array([item['cdom'] for item in estimates], dtype=float)
+    nap_vals = np.array([item['nap'] for item in estimates], dtype=float)
+    stats = {
+        'chl_mean': float(np.nanmean(chl_vals)),
+        'chl_sd': float(np.nanstd(chl_vals)),
+        'cdom_mean': float(np.nanmean(cdom_vals)),
+        'cdom_sd': float(np.nanstd(cdom_vals)),
+        'nap_mean': float(np.nanmean(nap_vals)),
+        'nap_sd': float(np.nanstd(nap_vals)),
+    }
+
+    pmin = list(np.asarray(siop['p_min'], dtype=float))
+    pmax = list(np.asarray(siop['p_max'], dtype=float))
+    original_pmin = np.asarray(siop['p_min'], dtype=float)
+    original_pmax = np.asarray(siop['p_max'], dtype=float)
+    means = [stats['chl_mean'], stats['cdom_mean'], stats['nap_mean']]
+    sds = [stats['chl_sd'], stats['cdom_sd'], stats['nap_sd']]
+
+    for index, (mean_value, sd_value) in enumerate(zip(means, sds)):
+        mean_value = float(np.clip(mean_value, original_pmin[index], original_pmax[index]))
+        if use_sd_bounds and np.isfinite(sd_value) and sd_value > 0.0:
+            lower = max(float(original_pmin[index]), mean_value - float(sd_value))
+            upper = min(float(original_pmax[index]), mean_value + float(sd_value))
+            if lower > upper:
+                lower = upper = mean_value
+        else:
+            lower = upper = mean_value
+        pmin[index] = lower
+        pmax[index] = upper
+
+    siop['p_min'] = sb.FreeParameters(*pmin)
+    siop['p_max'] = sb.FreeParameters(*pmax)
+    siop['p_bounds'] = tuple(zip(siop['p_min'], siop['p_max']))
+    stats['use_sd_bounds'] = bool(use_sd_bounds)
+    stats['applied_pmin'] = pmin[:3]
+    stats['applied_pmax'] = pmax[:3]
+    return stats
+
+
+def _write_deep_water_pixel_csv(csv_path, pixel_rows):
+    if not pixel_rows:
+        return
+    fieldnames = ['row', 'col', 'lat', 'lon', 'chl', 'cdom', 'nap', 'error_alpha_f', 'success']
+    with open(csv_path, 'w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in pixel_rows:
+            writer.writerow(row)
 
 
 def _suggest_chunk_rows(height, width, target_pixels=_SPLIT_TARGET_PIXELS, min_rows=_SPLIT_MIN_ROWS):
@@ -1173,7 +1369,7 @@ def _derive_pixel_spacing_meters(lat, lon, shape_geo):
     return dx, dy
 
 
-def _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo):
+def _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo, dx_m=None, dy_m=None):
     """Compute rise/run slope ratio from a depth raster."""
     depth = ma.array(depth_data)
     depth_values = np.asarray(depth.filled(np.nan), dtype=float)
@@ -1181,7 +1377,8 @@ def _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo):
     if depth_values.ndim != 2 or depth_values.shape[0] < 2 or depth_values.shape[1] < 2:
         raise RuntimeError("Slope calculation requires at least a 2x2 depth raster.")
 
-    dx_m, dy_m = _derive_pixel_spacing_meters(lat, lon, shape_geo)
+    if not (np.isfinite(dx_m) and dx_m > 0.0 and np.isfinite(dy_m) and dy_m > 0.0):
+        dx_m, dy_m = _derive_pixel_spacing_meters(lat, lon, shape_geo)
     if not np.isfinite(dx_m) or dx_m <= 0.0 or not np.isfinite(dy_m) or dy_m <= 0.0:
         raise RuntimeError("Unable to derive valid pixel spacing for slope calculation.")
 
@@ -1191,17 +1388,17 @@ def _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo):
     return ma.masked_array(slope_ratio.astype('float32', copy=False), mask=invalid)
 
 
-def _compute_depth_slope_degrees(depth_data, lat, lon, shape_geo):
+def _compute_depth_slope_degrees(depth_data, lat, lon, shape_geo, dx_m=None, dy_m=None):
     """Compute slope in degrees from a depth raster."""
-    slope_ratio = _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo)
+    slope_ratio = _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo, dx_m=dx_m, dy_m=dy_m)
     slope_degrees = np.degrees(np.arctan(np.asarray(slope_ratio.filled(np.nan), dtype=float)))
     invalid = ma.getmaskarray(slope_ratio) | ~np.isfinite(slope_degrees)
     return ma.masked_array(slope_degrees.astype('float32', copy=False), mask=invalid)
 
 
-def _compute_depth_slope_percent(depth_data, lat, lon, shape_geo):
+def _compute_depth_slope_percent(depth_data, lat, lon, shape_geo, dx_m=None, dy_m=None):
     """Compute slope in percent from a depth raster."""
-    slope_ratio = _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo)
+    slope_ratio = _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo, dx_m=dx_m, dy_m=dy_m)
     slope_percent = 100.0 * np.asarray(slope_ratio.filled(np.nan), dtype=float)
     invalid = ma.getmaskarray(slope_ratio) | ~np.isfinite(slope_percent)
     return ma.masked_array(slope_percent.astype('float32', copy=False), mask=invalid)
@@ -1354,6 +1551,21 @@ def _intersect_bounds(bounds_a, bounds_b):
         midpoint = 0.5 * (lower + upper)
         return (midpoint, midpoint)
     return (lower, upper)
+
+
+def _fixed_parameter_bounds(value, global_bounds):
+    if global_bounds is None:
+        if np.isfinite(value):
+            return (float(value), float(value))
+        return None
+    lower_global, upper_global = global_bounds
+    lower_global = float(lower_global)
+    upper_global = float(upper_global)
+    if not np.isfinite(value):
+        fallback = min(max(0.5 * (lower_global + upper_global), lower_global), upper_global)
+        return (fallback, fallback)
+    fixed_value = min(max(float(value), lower_global), upper_global)
+    return (fixed_value, fixed_value)
 
 
 def _build_local_depth_constraint(expected_depth, anchor_depth_reference, local_depths,
@@ -1602,7 +1814,8 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
                                       sub1_data, sub2_data, sub3_data,
                                       settings, depth_min, p_bounds,
                                       exposed_mask=None, dx_m=np.nan, dy_m=np.nan,
-                                      extra_confident_mask=None):
+                                      extra_confident_mask=None,
+                                      lock_water_parameters=False):
     depth = ma.array(depth_data, copy=False)
     sdi = ma.array(sdi_data, copy=False)
     error_f = ma.array(error_f_data, copy=False)
@@ -1693,7 +1906,6 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
     suspicious_mask = np.zeros(depth.shape, dtype=bool)
     pixel_plans = {}
     radius_px = int(settings['search_radius_px'])
-    radius_sq = float(radius_px * radius_px)
     slope_limit_ratio = max(0.0, float(settings.get('fixed_depth_max_slope_percent', 10.0))) / 100.0
     candidate_sdi_threshold = float(settings['suspect_max_sdi'])
 
@@ -1711,6 +1923,8 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
         confident_cdom = cdom_values[confident_rows, confident_cols]
         confident_nap = nap_values[confident_rows, confident_cols]
         confident_kd = kd_values[confident_rows, confident_cols]
+        confident_coords = np.column_stack((confident_rows, confident_cols)).astype(float, copy=False)
+        confident_tree = cKDTree(confident_coords)
 
         component_candidate_mask = (
             component_mask
@@ -1718,25 +1932,26 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
             & (sdi_values <= candidate_sdi_threshold)
         )
         candidate_rows, candidate_cols = np.where(component_candidate_mask)
-        for row, col in zip(candidate_rows, candidate_cols):
-            row_dist = confident_rows - row
-            col_dist = confident_cols - col
-            dist_sq = row_dist * row_dist + col_dist * col_dist
-            inside_radius = dist_sq <= radius_sq
-            if np.count_nonzero(inside_radius) < settings['min_anchor_count']:
+        if candidate_rows.size == 0:
+            continue
+        candidate_coords = np.column_stack((candidate_rows, candidate_cols)).astype(float, copy=False)
+        candidate_neighbour_indices = confident_tree.query_ball_point(candidate_coords, r=radius_px, eps=0.0)
+        for row, col, neighbour_indices in zip(candidate_rows, candidate_cols, candidate_neighbour_indices):
+            if len(neighbour_indices) < settings['min_anchor_count']:
                 continue
-            local_depths = confident_depths[inside_radius]
-            local_chl = confident_chl[inside_radius]
-            local_cdom = confident_cdom[inside_radius]
-            local_nap = confident_nap[inside_radius]
-            local_kd = confident_kd[inside_radius]
+            local_indices = np.sort(np.asarray(neighbour_indices, dtype=int))
+            local_depths = confident_depths[local_indices]
+            local_chl = confident_chl[local_indices]
+            local_cdom = confident_cdom[local_indices]
+            local_nap = confident_nap[local_indices]
+            local_kd = confident_kd[local_indices]
             adjacent_depths = _adjacent_anchor_values(depth_values, component_confident_mask, row, col)
             adjacent_chl = _adjacent_anchor_values(chl_values, component_confident_mask, row, col)
             adjacent_cdom = _adjacent_anchor_values(cdom_values, component_confident_mask, row, col)
             adjacent_nap = _adjacent_anchor_values(nap_values, component_confident_mask, row, col)
             adjacent_kd = _adjacent_anchor_values(kd_values, component_confident_mask, row, col)
-            local_row_dist = row_dist[inside_radius].astype(float)
-            local_col_dist = col_dist[inside_radius].astype(float)
+            local_row_dist = (confident_rows[local_indices] - row).astype(float, copy=False)
+            local_col_dist = (confident_cols[local_indices] - col).astype(float, copy=False)
             if np.isfinite(dx_m) and dx_m > 0.0 and np.isfinite(dy_m) and dy_m > 0.0:
                 local_distances = np.sqrt((local_row_dist * dy_m) ** 2 + (local_col_dist * dx_m) ** 2)
             else:
@@ -1757,18 +1972,23 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
                 continue
             if (depth_values[row, col] - expected_depth) < settings['suspect_min_depth_jump_m']:
                 continue
-            if adjacent_chl.size > 0:
-                reference_chl_value = float(np.nanmedian(adjacent_chl))
+            if lock_water_parameters:
+                reference_chl_value = float(chl_values[row, col])
+                reference_cdom_value = float(cdom_values[row, col])
+                reference_nap_value = float(nap_values[row, col])
             else:
-                reference_chl_value = _weighted_median(local_chl, local_weights)
-            if adjacent_cdom.size > 0:
-                reference_cdom_value = float(np.nanmedian(adjacent_cdom))
-            else:
-                reference_cdom_value = _weighted_median(local_cdom, local_weights)
-            if adjacent_nap.size > 0:
-                reference_nap_value = float(np.nanmedian(adjacent_nap))
-            else:
-                reference_nap_value = _weighted_median(local_nap, local_weights)
+                if adjacent_chl.size > 0:
+                    reference_chl_value = float(np.nanmedian(adjacent_chl))
+                else:
+                    reference_chl_value = _weighted_median(local_chl, local_weights)
+                if adjacent_cdom.size > 0:
+                    reference_cdom_value = float(np.nanmedian(adjacent_cdom))
+                else:
+                    reference_cdom_value = _weighted_median(local_cdom, local_weights)
+                if adjacent_nap.size > 0:
+                    reference_nap_value = float(np.nanmedian(adjacent_nap))
+                else:
+                    reference_nap_value = _weighted_median(local_nap, local_weights)
             if adjacent_kd.size > 0:
                 reference_kd_value = float(np.nanmedian(adjacent_kd))
             else:
@@ -1780,30 +2000,40 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
                 and np.isfinite(reference_kd_value)
             ):
                 continue
-            representative_score = (
-                np.abs(local_kd - reference_kd_value)
-                + 0.1 * np.abs(local_depths - anchor_depth_reference)
-            )
-            representative_score[~np.isfinite(representative_score)] = np.inf
-            representative_index = int(np.argmin(representative_score))
-            initial_chl_value = float(local_chl[representative_index])
-            initial_cdom_value = float(local_cdom[representative_index])
-            initial_nap_value = float(local_nap[representative_index])
-            if not (
-                np.isfinite(initial_chl_value)
-                and np.isfinite(initial_cdom_value)
-                and np.isfinite(initial_nap_value)
-            ):
+            if lock_water_parameters:
                 initial_chl_value = reference_chl_value
                 initial_cdom_value = reference_cdom_value
                 initial_nap_value = reference_nap_value
+            else:
+                representative_score = (
+                    np.abs(local_kd - reference_kd_value)
+                    + 0.1 * np.abs(local_depths - anchor_depth_reference)
+                )
+                representative_score[~np.isfinite(representative_score)] = np.inf
+                representative_index = int(np.argmin(representative_score))
+                initial_chl_value = float(local_chl[representative_index])
+                initial_cdom_value = float(local_cdom[representative_index])
+                initial_nap_value = float(local_nap[representative_index])
+                if not (
+                    np.isfinite(initial_chl_value)
+                    and np.isfinite(initial_cdom_value)
+                    and np.isfinite(initial_nap_value)
+                ):
+                    initial_chl_value = reference_chl_value
+                    initial_cdom_value = reference_cdom_value
+                    initial_nap_value = reference_nap_value
 
             if p_bounds is None or len(p_bounds) < 7:
                 continue
-            local_bounds = list(copy.deepcopy(tuple(p_bounds)))
-            local_bounds[0] = _build_local_parameter_bounds(reference_chl_value, local_chl, p_bounds[0], settings)
-            local_bounds[1] = _build_local_parameter_bounds(reference_cdom_value, local_cdom, p_bounds[1], settings)
-            local_bounds[2] = _build_local_parameter_bounds(reference_nap_value, local_nap, p_bounds[2], settings)
+            local_bounds = [tuple(bound) if bound is not None else None for bound in p_bounds]
+            if lock_water_parameters:
+                local_bounds[0] = _fixed_parameter_bounds(reference_chl_value, p_bounds[0])
+                local_bounds[1] = _fixed_parameter_bounds(reference_cdom_value, p_bounds[1])
+                local_bounds[2] = _fixed_parameter_bounds(reference_nap_value, p_bounds[2])
+            else:
+                local_bounds[0] = _build_local_parameter_bounds(reference_chl_value, local_chl, p_bounds[0], settings)
+                local_bounds[1] = _build_local_parameter_bounds(reference_cdom_value, local_cdom, p_bounds[1], settings)
+                local_bounds[2] = _build_local_parameter_bounds(reference_nap_value, local_nap, p_bounds[2], settings)
             depth_bounds, depth_tolerance = _build_local_depth_constraint(
                 expected_depth,
                 anchor_depth_reference,
@@ -1812,18 +2042,19 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
                 settings,
             )
             local_bounds[3] = depth_bounds
-            if adjacent_chl.size > 0:
-                adjacent_chl_ref = float(np.nanmedian(adjacent_chl))
-                adjacent_chl_bounds = _build_local_parameter_bounds(adjacent_chl_ref, adjacent_chl, p_bounds[0], settings)
-                local_bounds[0] = _intersect_bounds(local_bounds[0], adjacent_chl_bounds)
-            if adjacent_cdom.size > 0:
-                adjacent_cdom_ref = float(np.nanmedian(adjacent_cdom))
-                adjacent_cdom_bounds = _build_local_parameter_bounds(adjacent_cdom_ref, adjacent_cdom, p_bounds[1], settings)
-                local_bounds[1] = _intersect_bounds(local_bounds[1], adjacent_cdom_bounds)
-            if adjacent_nap.size > 0:
-                adjacent_nap_ref = float(np.nanmedian(adjacent_nap))
-                adjacent_nap_bounds = _build_local_parameter_bounds(adjacent_nap_ref, adjacent_nap, p_bounds[2], settings)
-                local_bounds[2] = _intersect_bounds(local_bounds[2], adjacent_nap_bounds)
+            if not lock_water_parameters:
+                if adjacent_chl.size > 0:
+                    adjacent_chl_ref = float(np.nanmedian(adjacent_chl))
+                    adjacent_chl_bounds = _build_local_parameter_bounds(adjacent_chl_ref, adjacent_chl, p_bounds[0], settings)
+                    local_bounds[0] = _intersect_bounds(local_bounds[0], adjacent_chl_bounds)
+                if adjacent_cdom.size > 0:
+                    adjacent_cdom_ref = float(np.nanmedian(adjacent_cdom))
+                    adjacent_cdom_bounds = _build_local_parameter_bounds(adjacent_cdom_ref, adjacent_cdom, p_bounds[1], settings)
+                    local_bounds[1] = _intersect_bounds(local_bounds[1], adjacent_cdom_bounds)
+                if adjacent_nap.size > 0:
+                    adjacent_nap_ref = float(np.nanmedian(adjacent_nap))
+                    adjacent_nap_bounds = _build_local_parameter_bounds(adjacent_nap_ref, adjacent_nap, p_bounds[2], settings)
+                    local_bounds[2] = _intersect_bounds(local_bounds[2], adjacent_nap_bounds)
             if adjacent_depths.size > 0:
                 adjacent_depth_ref = float(np.nanmedian(adjacent_depths))
                 adjacent_depth_bounds, adjacent_depth_tolerance = _build_local_depth_constraint(
@@ -3171,6 +3402,7 @@ if __name__ == "__main__":
         fully_relaxed = False
         output_modeled_reflectance = False
         crop_selection = None
+        deep_water_selection = None
         saved_sensor_band_mapping = None
         false_deep_correction_settings = dict(DEFAULT_FALSE_DEEP_CORRECTION_SETTINGS)
         if args.path:
@@ -3194,6 +3426,7 @@ if __name__ == "__main__":
             fully_relaxed = _coerce_bool(root.get('fully_relaxed', False))
             output_modeled_reflectance = _coerce_bool(root.get('output_modeled_reflectance', False))
             crop_selection = _parse_crop_selection(root)
+            deep_water_selection = _parse_deep_water_selection(root)
             saved_sensor_band_mapping = _parse_saved_sensor_band_mapping(root)
             false_deep_correction_settings = _normalise_false_deep_correction_settings({
                 'enabled': root.get('false_deep_correction_enabled', False),
@@ -3250,6 +3483,7 @@ if __name__ == "__main__":
             bathy_tolerance_m = _coerce_float(xml_dict.get('bathy_tolerance_m'), 0.0)
             nedr_mode = str(xml_dict.get('nedr_mode', 'fixed')).strip().lower()
             crop_selection = _parse_crop_selection(xml_dict)
+            deep_water_selection = _parse_deep_water_selection(xml_dict)
             saved_sensor_band_mapping = _parse_saved_sensor_band_mapping(xml_dict)
 
         if fully_relaxed and not relaxed:
@@ -3577,6 +3811,165 @@ if __name__ == "__main__":
                 sample_var_name=grid_reference_var_name,
             )
 
+            deep_water_rrs_full = None
+            deep_water_lat_full = None
+            deep_water_lon_full = None
+            deep_water_grid_metadata = None
+            if deep_water_selection and lat_array is not None and lon_array is not None:
+                deep_water_rrs_full = np.array(rrs, dtype='float32', copy=True)
+                deep_water_lat_full = np.array(lat_array, dtype='float32', copy=True)
+                deep_water_lon_full = np.array(lon_array, dtype='float32', copy=True)
+                deep_water_grid_metadata = source_grid_metadata
+
+            # Sensor filter
+            if args.path:
+                [sensor_filter, nedr] = create_input.read_sensor_filter(sensor_xml_path)
+            else:
+                [sensor_filter, nedr] = create_input.read_sensor_filter_gui(sensor_xml_path, nbands)
+
+            # Read SIOP and prepare inputs
+            [siop, envmeta] = create_input.read_siop(siop_xml_path, pmin, pmax)
+            error_name = 'alpha_f'
+            opt_met = 'SLSQP'
+            image_info = {'sensor_filter': sensor_filter, 'nedr': nedr}
+            [wavelengths, siop, image_info, fixed_parameters, objective] = create_input.prepare_input(siop, envmeta, image_info, error_name)
+            algo = main_sambuca_snap.main_sambuca()
+
+            # initialize the rrs array
+            if above_rrs_flag == True:
+                rrs = (2 * rrs) / ((3 * rrs) + 1)
+                if deep_water_rrs_full is not None:
+                    deep_water_rrs_full = (2 * deep_water_rrs_full) / ((3 * deep_water_rrs_full) + 1)
+
+            deep_water_prior_stats = None
+            deep_water_csv_path = None
+            if deep_water_selection and deep_water_rrs_full is not None and deep_water_lat_full is not None and deep_water_lon_full is not None:
+                try:
+                    deep_water_mask = _rasterize_epsg4326_geometries(
+                        deep_water_selection.get('polygons') or [],
+                        deep_water_lat_full,
+                        deep_water_lon_full,
+                        deep_water_grid_metadata,
+                    )
+                    if deep_water_mask is not None and np.any(deep_water_mask):
+                        deep_rows, deep_cols = np.where(deep_water_mask)
+                        selected_pixel_count = int(deep_rows.size)
+                        if selected_pixel_count > 1000:
+                            rng = np.random.default_rng(42)
+                            chosen_indices = np.sort(rng.choice(selected_pixel_count, size=1000, replace=False))
+                            deep_rows = deep_rows[chosen_indices]
+                            deep_cols = deep_cols[chosen_indices]
+                            print(
+                                f"[INFO]: Deep-water polygons selected {selected_pixel_count} pixel(s); "
+                                "randomly subsampling 1000 pixels for deep-water analysis."
+                            )
+                        chl_bounds = tuple(float(v) for v in siop['p_bounds'][0])
+                        cdom_bounds = tuple(float(v) for v in siop['p_bounds'][1])
+                        nap_bounds = tuple(float(v) for v in siop['p_bounds'][2])
+                        deep_water_pixel_rows = []
+                        successful_estimates = []
+                        for row, col in zip(deep_rows.tolist(), deep_cols.tolist()):
+                            observed_rrs = deep_water_rrs_full[:, int(row), int(col)]
+                            estimate = _estimate_deep_water_pixel(
+                                objective,
+                                observed_rrs,
+                                chl_bounds,
+                                cdom_bounds,
+                                nap_bounds,
+                            )
+                            if estimate is None:
+                                continue
+                            pixel_row = {
+                                'row': int(row),
+                                'col': int(col),
+                                'lat': float(deep_water_lat_full[int(row), int(col)]),
+                                'lon': float(deep_water_lon_full[int(row), int(col)]),
+                                'chl': estimate['chl'],
+                                'cdom': estimate['cdom'],
+                                'nap': estimate['nap'],
+                                'error_alpha_f': estimate['error_alpha_f'],
+                                'success': int(bool(estimate.get('success', False))),
+                            }
+                            deep_water_pixel_rows.append(pixel_row)
+                            if estimate.get('success', False):
+                                successful_estimates.append(estimate)
+                        if successful_estimates:
+                            deep_water_prior_stats = _apply_deep_water_priors(
+                                siop,
+                                successful_estimates,
+                                deep_water_selection.get('use_sd_bounds', False),
+                            )
+                            deep_water_csv_path = os.path.splitext(ofile)[0] + '_deep_water_pixels.csv'
+                            _write_deep_water_pixel_csv(deep_water_csv_path, deep_water_pixel_rows)
+                            print(
+                                "[INFO]: Deep-water priors estimated from "
+                                f"{len(successful_estimates)} selected pixel(s). "
+                                f"CHL={deep_water_prior_stats['chl_mean']:.6f}, "
+                                f"CDOM={deep_water_prior_stats['cdom_mean']:.6f}, "
+                                f"NAP={deep_water_prior_stats['nap_mean']:.6f}."
+                            )
+                            if deep_water_selection.get('use_sd_bounds', False):
+                                print("[INFO]: Applying deep-water priors as mean ± sd bounds for CHL, CDOM and NAP.")
+                                retained_lines = (
+                                    (
+                                        'CHL',
+                                        deep_water_prior_stats['chl_mean'],
+                                        deep_water_prior_stats['chl_sd'],
+                                        deep_water_prior_stats['applied_pmin'][0],
+                                        deep_water_prior_stats['applied_pmax'][0],
+                                    ),
+                                    (
+                                        'CDOM',
+                                        deep_water_prior_stats['cdom_mean'],
+                                        deep_water_prior_stats['cdom_sd'],
+                                        deep_water_prior_stats['applied_pmin'][1],
+                                        deep_water_prior_stats['applied_pmax'][1],
+                                    ),
+                                    (
+                                        'NAP',
+                                        deep_water_prior_stats['nap_mean'],
+                                        deep_water_prior_stats['nap_sd'],
+                                        deep_water_prior_stats['applied_pmin'][2],
+                                        deep_water_prior_stats['applied_pmax'][2],
+                                    ),
+                                )
+                                for name, mean_value, sd_value, lower_value, upper_value in retained_lines:
+                                    print(
+                                        f"[INFO]: Retained deep-water {name}: "
+                                        f"mean={mean_value:.6f}, sd={sd_value:.6f}, "
+                                        f"bounds=[{lower_value:.6f}, {upper_value:.6f}]"
+                                    )
+                            else:
+                                print("[INFO]: Applying deep-water priors as fixed CHL, CDOM and NAP values.")
+                                retained_lines = (
+                                    ('CHL', deep_water_prior_stats['applied_pmin'][0]),
+                                    ('CDOM', deep_water_prior_stats['applied_pmin'][1]),
+                                    ('NAP', deep_water_prior_stats['applied_pmin'][2]),
+                                )
+                                for name, retained_value in retained_lines:
+                                    print(f"[INFO]: Retained deep-water {name}: value={retained_value:.6f}")
+                        else:
+                            print("[WARN]: Deep-water polygons were provided, but no valid deep-water parameter estimates converged. Ignoring deep-water priors.")
+                    else:
+                        print("[WARN]: Deep-water polygons do not overlap the current scene grid. Ignoring deep-water priors.")
+                except Exception as e:
+                    print(f"[WARN]: Failed to estimate deep-water priors: {e}")
+
+            if not args.path and deep_water_prior_stats is not None:
+                xml_dict['deep_water_enabled'] = True
+                xml_dict['deep_water_use_sd_bounds'] = bool(deep_water_selection.get('use_sd_bounds', False))
+                xml_dict['deep_water_selected_pixel_count'] = int(np.count_nonzero(deep_water_mask)) if 'deep_water_mask' in locals() and deep_water_mask is not None else 0
+                xml_dict['deep_water_success_pixel_count'] = int(len(successful_estimates)) if 'successful_estimates' in locals() else 0
+                xml_dict['deep_water_csv_path'] = deep_water_csv_path or ''
+                xml_dict['deep_water_chl_mean'] = deep_water_prior_stats['chl_mean']
+                xml_dict['deep_water_chl_sd'] = deep_water_prior_stats['chl_sd']
+                xml_dict['deep_water_cdom_mean'] = deep_water_prior_stats['cdom_mean']
+                xml_dict['deep_water_cdom_sd'] = deep_water_prior_stats['cdom_sd']
+                xml_dict['deep_water_nap_mean'] = deep_water_prior_stats['nap_mean']
+                xml_dict['deep_water_nap_sd'] = deep_water_prior_stats['nap_sd']
+                xml_dict['deep_water_applied_pmin'] = deep_water_prior_stats['applied_pmin']
+                xml_dict['deep_water_applied_pmax'] = deep_water_prior_stats['applied_pmax']
+
             if crop_selection:
                 rrs, lat_array, lon_array, crop_window = _apply_crop_selection(
                     rrs,
@@ -3624,18 +4017,6 @@ if __name__ == "__main__":
                 'grid_metadata': source_grid_metadata,
             }
 
-            # Sensor filter
-            if args.path:
-                [sensor_filter, nedr] = create_input.read_sensor_filter(sensor_xml_path)
-            else:
-                [sensor_filter, nedr] = create_input.read_sensor_filter_gui(sensor_xml_path, nbands)
-
-            # Read SIOP and prepare inputs
-            [siop, envmeta] = create_input.read_siop(siop_xml_path, pmin, pmax)
-            error_name = 'alpha_f'
-            opt_met = 'SLSQP'
-            image_info = {'sensor_filter': sensor_filter, 'nedr': nedr}
-            [wavelengths, siop, image_info, fixed_parameters, objective] = create_input.prepare_input(siop, envmeta, image_info, error_name)
             image_info['lat_grid'] = geo_metadata.get('lat_grid')
             image_info['lon_grid'] = geo_metadata.get('lon_grid')
             image_info['lat_name'] = geo_metadata.get('lat_name', 'lat')
@@ -3645,15 +4026,10 @@ if __name__ == "__main__":
             image_info['legacy_lat'] = geo_metadata.get('legacy_lat')
             image_info['legacy_lon'] = geo_metadata.get('legacy_lon')
             image_info['grid_metadata'] = geo_metadata.get('grid_metadata')
-            algo = main_sambuca_snap.main_sambuca()
 
-            # initialize the rrs array
-            if above_rrs_flag == True:
-                rrs = (2 * rrs) / ((3 * rrs) + 1)
             print('rrs shape: ', rrs.shape)
 
-            # call the main script to calculate the output
-            # Load and resample bathymetry if provided
+            # Load and resample bathymetry for the final study area only.
             bathy_arr = None
             bathy_exposed_mask = None
             bathy_tol = 0.0
@@ -3662,7 +4038,6 @@ if __name__ == "__main__":
                     from rasterio.warp import reproject, Resampling
                     import rasterio
 
-                    # derive transform from the coordinate grid detected above
                     transform, crs = _derive_transform_crs(
                         width,
                         height,
@@ -3672,7 +4047,6 @@ if __name__ == "__main__":
                         geo_metadata.get('grid_metadata'))
 
                     with rasterio.open(bathy_path) as src:
-                        # use float32 dest buffer
                         dest = np.empty((height, width), dtype='float32')
                         src_crs, crs_note = _normalize_bathy_source_crs(src.crs)
                         if src_crs is None:
@@ -3708,7 +4082,6 @@ if __name__ == "__main__":
                         dest = dest + bathy_correction_m
 
                     bathy_tol = bathy_tolerance_m
-
                     bathy_arr = dest
                 except Exception as e:
                     print(f"[WARN]: Failed to load/resample bathy '{bathy_path}': {e}")
@@ -3853,6 +4226,8 @@ if __name__ == "__main__":
                         lat_for_correction,
                         lon_for_correction,
                         shape_geo_for_correction,
+                        dx_m=dx_m,
+                        dy_m=dy_m,
                     )
                     try:
                         dx_m, dy_m = _derive_pixel_spacing_meters(
@@ -3865,112 +4240,136 @@ if __name__ == "__main__":
                     correction_plan = None
                     extra_confident_mask = np.zeros((height, width), dtype=bool)
                     rerun_wave = 0
-                    while True:
-                        depth_for_plan = ma.masked_array(correction_recorder.depth, mask=(correction_recorder.success < 1))
-                        sdi_for_plan = ma.masked_array(correction_recorder.sdi, mask=(correction_recorder.success < 1))
-                        error_for_plan = ma.masked_array(correction_recorder.error_alpha_f, mask=(correction_recorder.success < 1))
-                        slope_before = _compute_depth_slope_percent(
-                            depth_for_plan,
-                            lat_for_correction,
-                            lon_for_correction,
-                            shape_geo_for_correction,
-                        )
-                        correction_plan = _build_false_deep_correction_plan(
-                            depth_for_plan,
-                            sdi_for_plan,
-                            error_for_plan,
-                            slope_before,
-                            correction_recorder.chl,
-                            correction_recorder.cdom,
-                            correction_recorder.nap,
-                            correction_recorder.kd,
-                            correction_recorder.sub1_frac,
-                            correction_recorder.sub2_frac,
-                            correction_recorder.sub3_frac,
-                            false_deep_correction_settings,
-                            float(pmin[3]),
-                            siop['p_bounds'],
-                            exposed_mask=bathy_exposed_mask,
-                            dx_m=dx_m,
-                            dy_m=dy_m,
-                            extra_confident_mask=extra_confident_mask,
-                        )
-                        suspect_mask = np.asarray(correction_plan['suspicious_mask'], dtype=bool)
-                        eligible_mask = suspect_mask & (
-                            false_deep_attempt_count < int(false_deep_correction_settings['max_rerun_attempts'])
-                        )
-                        pending_count = int(np.count_nonzero(eligible_mask))
-                        if pending_count <= 0:
-                            break
-                        frontier_mask = _select_suspicious_frontier(
-                            eligible_mask,
-                            correction_plan['confident_mask'],
-                            np.zeros_like(eligible_mask, dtype=bool),
-                        )
-                        pixel_constraints = [
-                            item for item in (correction_plan.get('rerun_items') or [])
-                            if frontier_mask[int(item['x']), int(item['y'])]
-                        ]
-                        if not pixel_constraints:
-                            break
-                        rerun_wave += 1
-                        print(
-                            f"[INFO]: Re-optimising suspicious pixel wave {rerun_wave} "
-                            f"({len(pixel_constraints)} pixel(s)) using nearby neighbour constraints."
-                        )
-                        pixel_coords = [(int(item['x']), int(item['y'])) for item in pixel_constraints]
-                        pixel_snapshot = _snapshot_result_recorder_pixels(correction_recorder, pixel_coords)
-                        for item in pixel_constraints:
-                            row = int(item['x'])
-                            col = int(item['y'])
-                            false_deep_reoptimised_mask[row, col] = True
-                            false_deep_attempt_count[row, col] = min(
-                                np.iinfo(false_deep_attempt_count.dtype).max,
-                                false_deep_attempt_count[row, col] + 1,
+                    rerun_executor = None
+                    try:
+                        while True:
+                            depth_for_plan = ma.masked_array(correction_recorder.depth, mask=(correction_recorder.success < 1))
+                            sdi_for_plan = ma.masked_array(correction_recorder.sdi, mask=(correction_recorder.success < 1))
+                            error_for_plan = ma.masked_array(correction_recorder.error_alpha_f, mask=(correction_recorder.success < 1))
+                            slope_before = _compute_depth_slope_percent(
+                                depth_for_plan,
+                                lat_for_correction,
+                                lon_for_correction,
+                                shape_geo_for_correction,
+                                dx_m=dx_m,
+                                dy_m=dy_m,
                             )
-                        output_calculation.rerun_selected_pixels(
-                            rrs,
-                            objective,
-                            siop,
-                            correction_recorder,
-                            pixel_constraints,
-                            opt_met,
-                            relaxed,
-                            free_cpu=args.free_cpu,
-                            bathy_tolerance=0.0,
-                            optimize_initial_guesses=False,
-                            use_five_initial_guesses=False,
-                            apply_shallow_adjustment=False,
-                            allow_target_sum_over_one=False,
-                            normalise_target_fractions=False,
-                            fully_relaxed=fully_relaxed,
-                        )
-                        accepted_this_wave = 0
-                        stable_mask = np.asarray(correction_plan['confident_mask'], dtype=bool)
-                        for item in pixel_constraints:
-                            row = int(item['x'])
-                            col = int(item['y'])
-                            pixel_state = pixel_snapshot.get((row, col), {})
-                            if _accept_corrected_pixel(
-                                correction_recorder,
-                                pixel_state,
-                                stable_mask,
-                                row,
-                                col,
+                            correction_plan = _build_false_deep_correction_plan(
+                                depth_for_plan,
+                                sdi_for_plan,
+                                error_for_plan,
+                                slope_before,
+                                correction_recorder.chl,
+                                correction_recorder.cdom,
+                                correction_recorder.nap,
+                                correction_recorder.kd,
+                                correction_recorder.sub1_frac,
+                                correction_recorder.sub2_frac,
+                                correction_recorder.sub3_frac,
                                 false_deep_correction_settings,
-                            ):
-                                extra_confident_mask[row, col] = True
-                                accepted_this_wave += 1
-                            else:
-                                _restore_result_recorder_pixel(correction_recorder, pixel_state, row, col)
-                        false_deep_corrected_pixel_count += accepted_this_wave
-                        print(
-                            f"[INFO]: Accepted {accepted_this_wave}/{len(pixel_constraints)} "
-                            f"pixel update(s) after local continuity checks."
-                        )
-                        if accepted_this_wave <= 0:
-                            print("[INFO]: False-deep correction wave produced no accepted continuity improvements; stopping reruns.")
-                            break
+                                float(pmin[3]),
+                                siop['p_bounds'],
+                                exposed_mask=bathy_exposed_mask,
+                                dx_m=dx_m,
+                                dy_m=dy_m,
+                                extra_confident_mask=extra_confident_mask,
+                                lock_water_parameters=(deep_water_prior_stats is not None),
+                            )
+                            suspect_mask = np.asarray(correction_plan['suspicious_mask'], dtype=bool)
+                            eligible_mask = suspect_mask & (
+                                false_deep_attempt_count < int(false_deep_correction_settings['max_rerun_attempts'])
+                            )
+                            pending_count = int(np.count_nonzero(eligible_mask))
+                            if pending_count <= 0:
+                                break
+                            frontier_mask = _select_suspicious_frontier(
+                                eligible_mask,
+                                correction_plan['confident_mask'],
+                                np.zeros_like(eligible_mask, dtype=bool),
+                            )
+                            pixel_constraints = [
+                                item for item in (correction_plan.get('rerun_items') or [])
+                                if frontier_mask[int(item['x']), int(item['y'])]
+                            ]
+                            if not pixel_constraints:
+                                break
+                            if rerun_executor is None:
+                                rerun_executor = output_calculation.create_rerun_worker_pool(
+                                    objective,
+                                    siop,
+                                    opt_met,
+                                    relaxed,
+                                    fully_relaxed=fully_relaxed,
+                                    free_cpu=args.free_cpu,
+                                    bathy_tolerance=0.0,
+                                    optimize_initial_guesses=False,
+                                    use_five_initial_guesses=False,
+                                    apply_shallow_adjustment=False,
+                                    allow_target_sum_over_one=False,
+                                    max_tasks=pending_count,
+                                )
+                            rerun_wave += 1
+                            print(
+                                f"[INFO]: Re-optimising suspicious pixel wave {rerun_wave} "
+                                f"({len(pixel_constraints)} pixel(s)) using nearby neighbour constraints."
+                            )
+                            pixel_coords = [(int(item['x']), int(item['y'])) for item in pixel_constraints]
+                            pixel_snapshot = _snapshot_result_recorder_pixels(correction_recorder, pixel_coords)
+                            for item in pixel_constraints:
+                                row = int(item['x'])
+                                col = int(item['y'])
+                                false_deep_reoptimised_mask[row, col] = True
+                                false_deep_attempt_count[row, col] = min(
+                                    np.iinfo(false_deep_attempt_count.dtype).max,
+                                    false_deep_attempt_count[row, col] + 1,
+                                )
+                            output_calculation.rerun_selected_pixels(
+                                rrs,
+                                objective,
+                                siop,
+                                correction_recorder,
+                                pixel_constraints,
+                                opt_met,
+                                relaxed,
+                                free_cpu=args.free_cpu,
+                                bathy_tolerance=0.0,
+                                optimize_initial_guesses=False,
+                                use_five_initial_guesses=False,
+                                apply_shallow_adjustment=False,
+                                allow_target_sum_over_one=False,
+                                normalise_target_fractions=False,
+                                fully_relaxed=fully_relaxed,
+                                executor=rerun_executor,
+                            )
+                            accepted_this_wave = 0
+                            stable_mask = np.asarray(correction_plan['confident_mask'], dtype=bool)
+                            for item in pixel_constraints:
+                                row = int(item['x'])
+                                col = int(item['y'])
+                                pixel_state = pixel_snapshot.get((row, col), {})
+                                if _accept_corrected_pixel(
+                                    correction_recorder,
+                                    pixel_state,
+                                    stable_mask,
+                                    row,
+                                    col,
+                                    false_deep_correction_settings,
+                                ):
+                                    extra_confident_mask[row, col] = True
+                                    accepted_this_wave += 1
+                                else:
+                                    _restore_result_recorder_pixel(correction_recorder, pixel_state, row, col)
+                            false_deep_corrected_pixel_count += accepted_this_wave
+                            print(
+                                f"[INFO]: Accepted {accepted_this_wave}/{len(pixel_constraints)} "
+                                f"pixel update(s) after local continuity checks."
+                            )
+                            if accepted_this_wave <= 0:
+                                print("[INFO]: False-deep correction wave produced no accepted continuity improvements; stopping reruns.")
+                                break
+                    finally:
+                        if rerun_executor is not None:
+                            rerun_executor.shutdown()
 
                     if correction_plan is None or not np.any(false_deep_reoptimised_mask):
                         print("[INFO]: False-deep bathymetry correction found no suspect pixels.")

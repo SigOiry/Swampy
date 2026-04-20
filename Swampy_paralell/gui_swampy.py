@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import tkinter as tk
 import xml.etree.ElementTree as ET
 from tkinter import BooleanVar, StringVar, W
@@ -602,7 +603,7 @@ def _iter_geometry_line_parts(geometry):
             yield from _iter_geometry_line_parts(sub_geom)
 
 
-def _load_preview_band_from_netcdf(path, sensor_name=None):
+def _load_preview_band_from_netcdf(path, sensor_name=None, prefer_rgb_preview=True):
     from netCDF4 import Dataset
 
     latlon_names = {'lat', 'latitude', 'lon', 'longitude'}
@@ -688,7 +689,8 @@ def _load_preview_band_from_netcdf(path, sensor_name=None):
                         spectral_axis,
                     )
                     if (
-                        is_sentinel2
+                        prefer_rgb_preview
+                        and is_sentinel2
                         and preview_pixels > 0
                         and preview_pixels <= _SENTINEL_RGB_PREVIEW_MAX_PIXELS
                     ):
@@ -750,7 +752,7 @@ def _load_preview_band_from_netcdf(path, sensor_name=None):
 
         if two_d_candidates:
             two_d_candidates.sort(key=lambda item: (item[0], item[1].lower()))
-            if is_sentinel2:
+            if prefer_rgb_preview and is_sentinel2:
                 preview_height = int(two_d_candidates[0][2].shape[0])
                 preview_width = int(two_d_candidates[0][2].shape[1])
                 preview_pixels = preview_height * preview_width
@@ -838,7 +840,11 @@ def _preview_image_from_array(preview_data, max_dim=1400):
                 vmin, vmax = 0.0, 1.0
             if vmax > vmin:
                 clipped = np.clip(channel, vmin, vmax)
-                scaled[..., channel_index] = np.round(((clipped - vmin) / (vmax - vmin)) * 255.0).astype('uint8')
+                if np.any(finite_mask):
+                    channel_scaled = np.round(
+                        ((clipped[finite_mask] - vmin) / (vmax - vmin)) * 255.0
+                    )
+                    scaled[..., channel_index][finite_mask] = channel_scaled.astype('uint8')
         image = Image.fromarray(scaled, mode='RGB')
     else:
         finite_mask = np.isfinite(preview)
@@ -854,7 +860,9 @@ def _preview_image_from_array(preview_data, max_dim=1400):
         scaled = np.zeros(preview.shape, dtype='uint8')
         if vmax > vmin:
             clipped = np.clip(preview, vmin, vmax)
-            scaled = np.round(((clipped - vmin) / (vmax - vmin)) * 255.0).astype('uint8')
+            if np.any(finite_mask):
+                preview_scaled = np.round(((clipped[finite_mask] - vmin) / (vmax - vmin)) * 255.0)
+                scaled[finite_mask] = preview_scaled.astype('uint8')
         image = Image.fromarray(scaled, mode='L')
     width, height = image.size
     largest_dim = max(width, height)
@@ -892,21 +900,39 @@ def _open_leaflet_crop_window(repo_root, request_payload):
         request_payload = dict(request_payload)
         preview_data = request_payload.pop("preview_data", None)
         if preview_data is not None:
-            request_payload["image_url"] = _write_preview_image_asset(preview_data, temp_dir)
+            preview_max_dim = int(request_payload.pop("preview_max_dim", 1400))
+            request_payload["image_url"] = _write_preview_image_asset(
+                preview_data,
+                temp_dir,
+                max_dim=max(256, preview_max_dim),
+            )
         request_path = os.path.join(temp_dir, "request.json")
         response_path = os.path.join(temp_dir, "response.json")
         helper_log_path = os.path.join(temp_dir, "leaflet_crop_helper.log")
         with open(request_path, "w", encoding="utf-8") as request_file:
             json.dump(request_payload, request_file)
         with open(helper_log_path, "w", encoding="utf-8") as helper_log:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [sys.executable, helper_script, request_path, response_path],
                 cwd=repo_root,
                 stdout=helper_log,
                 stderr=subprocess.STDOUT,
                 text=True,
-                check=False,
             )
+            while process.poll() is None:
+                try:
+                    root_widget = tk._default_root
+                    if root_widget is not None:
+                        root_widget.update_idletasks()
+                        root_widget.update()
+                except Exception:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                    raise
+                time.sleep(0.05)
+            result = process
         if result.returncode != 0:
             details = ""
             if os.path.isfile(helper_log_path):
@@ -1161,7 +1187,10 @@ def gui():
     input_image_var = StringVar(value="")
     output_folder_var = StringVar(value=os.path.join(cwd, "Output"))
     crop_selection = None
+    deep_water_selection = None
     crop_summary_var = StringVar(value="Full scene")
+    deep_water_summary_var = StringVar(value="No deep-water polygons selected")
+    deep_water_use_sd_var = BooleanVar(value=False)
     io_change_state = {
         "modified_since_load": False,
         "suspend_tracking": False,
@@ -1375,6 +1404,27 @@ def gui():
             return None
         return normalized
 
+    def _normalise_deep_water_selection(selection):
+        if not selection:
+            return None
+        normalized = dict(selection)
+        polygons = normalized.get("polygons") or []
+        valid_polygons = []
+        for geometry in polygons:
+            if not isinstance(geometry, dict):
+                continue
+            geom_type = str(geometry.get("type") or "")
+            coordinates = geometry.get("coordinates")
+            if geom_type not in {"Polygon", "MultiPolygon"} or not coordinates:
+                continue
+            valid_polygons.append(geometry)
+        if not valid_polygons:
+            return None
+        normalized["polygons"] = valid_polygons
+        normalized["mask_path"] = ""
+        normalized["bbox"] = None
+        return normalized
+
     def _format_crop_summary(selection):
         if not selection:
             return "Full scene"
@@ -1391,14 +1441,35 @@ def gui():
             parts.append(f"Mask {os.path.basename(mask_path)}")
         return " | ".join(parts) if parts else "Full scene"
 
+    def _format_deep_water_summary(selection):
+        if not selection:
+            return "No deep-water polygons selected"
+        polygon_count = len(selection.get("polygons") or [])
+        if polygon_count <= 0:
+            return "No deep-water polygons selected"
+        mode_text = "mean ± sd bounds" if deep_water_use_sd_var.get() else "fixed values"
+        return (
+            f"{polygon_count} deep-water polygon(s) selected ({mode_text}). "
+            "CHL, CDOM and NAP parameter bounds below are disabled and inferred from those pixels."
+        )
+
     def _set_crop_selection(selection):
         nonlocal crop_selection
         crop_selection = _normalise_crop_selection(selection)
         crop_summary_var.set(_format_crop_summary(crop_selection))
         update_crop_button_state()
 
+    def _set_deep_water_selection(selection):
+        nonlocal deep_water_selection
+        deep_water_selection = _normalise_deep_water_selection(selection)
+        deep_water_summary_var.set(_format_deep_water_summary(deep_water_selection))
+        _update_deep_water_parameter_controls()
+
     def clear_crop_selection():
         _set_crop_selection(None)
+
+    def clear_deep_water_selection():
+        _set_deep_water_selection(None)
 
     crop_button = None
 
@@ -1406,6 +1477,10 @@ def gui():
         if crop_button is None:
             return
         _set_widget_enabled(crop_button, bool(_current_input_file_list()))
+
+    def _refresh_deep_water_summary(*_args):
+        deep_water_summary_var.set(_format_deep_water_summary(deep_water_selection))
+        _update_deep_water_parameter_controls()
 
     def _run_with_loading_dialog(title_text, message_text, worker_func):
         result_holder = {"done": False}
@@ -1546,6 +1621,57 @@ def gui():
             },
         }
 
+    def _prepare_deep_water_window_request(first_image):
+        preview_data, preview_info = _load_preview_band_from_netcdf(
+            first_image,
+            sensor_state["sensor_name"],
+            prefer_rgb_preview=True,
+        )
+
+        lat_grid = preview_info.get("lat_grid")
+        lon_grid = preview_info.get("lon_grid")
+        if lat_grid is None or lon_grid is None:
+            raise RuntimeError("The deep-water selector requires latitude and longitude coordinates in the input NetCDF.")
+
+        finite_coord_mask = np.isfinite(lat_grid) & np.isfinite(lon_grid)
+        if not np.any(finite_coord_mask):
+            raise RuntimeError("The deep-water selector requires valid latitude and longitude coordinates.")
+
+        lon_min = float(np.nanmin(lon_grid[finite_coord_mask]))
+        lon_max = float(np.nanmax(lon_grid[finite_coord_mask]))
+        lat_min = float(np.nanmin(lat_grid[finite_coord_mask]))
+        lat_max = float(np.nanmax(lat_grid[finite_coord_mask]))
+
+        existing_selection = _normalise_deep_water_selection(deep_water_selection) or {"polygons": []}
+        existing_source_path = str(existing_selection.get("source_path") or "").strip()
+        if existing_source_path and not _paths_equivalent(existing_source_path, first_image):
+            existing_selection = {"polygons": []}
+
+        return {
+            "mode": "polygons",
+            "title": "Deep-water polygons",
+            "subtitle": (
+                f"{preview_info.get('preview_description', preview_info['source_name'])}. "
+                "Draw one or several polygons over optically deep water. These pixels will be used to estimate CHL, CDOM and NAP."
+            ),
+            "image_name": os.path.basename(first_image),
+            "source_name": preview_info["source_name"],
+            "sensor_name": sensor_state["sensor_name"],
+            "preview_description": preview_info.get("preview_description", preview_info["source_name"]),
+            "preview_data": preview_data,
+            "preview_max_dim": 1000,
+            "lon_min": lon_min,
+            "lon_max": lon_max,
+            "lat_min": lat_min,
+            "lat_max": lat_max,
+            "allow_mask_import": False,
+            "allow_rectangle": False,
+            "allow_polygon": True,
+            "selection": {
+                "polygons": list(existing_selection.get("polygons") or []),
+            },
+        }
+
     def open_crop_popup():
         current_files = _current_input_file_list()
         if not current_files:
@@ -1577,6 +1703,38 @@ def gui():
 
         selection["source_path"] = first_image
         _set_crop_selection(selection)
+
+    def open_deep_water_popup():
+        current_files = _current_input_file_list()
+        if not current_files:
+            messagebox.showinfo("No input image", "Select at least one input image before defining deep-water polygons.", parent=root)
+            return
+
+        first_image = current_files[0]
+        if not os.path.isfile(first_image):
+            messagebox.showerror("Missing input image", f"Input image not found:\n{first_image}", parent=root)
+            return
+
+        try:
+            request_payload = _run_with_loading_dialog(
+                "Loading deep-water selector",
+                "Preparing the preview and polygon interface...",
+                lambda: _prepare_deep_water_window_request(first_image),
+            )
+            selection = _open_leaflet_crop_window(cwd, request_payload)
+        except Exception as exc:
+            messagebox.showerror(
+                "Deep-water selector unavailable",
+                f"Unable to open the deep-water selection window.\n\n{exc}",
+                parent=root,
+            )
+            return
+
+        if selection is None:
+            return
+
+        selection["source_path"] = first_image
+        _set_deep_water_selection(selection)
 
     def _get_form_validation_error():
         current_files = _current_input_file_list()
@@ -3736,16 +3894,22 @@ def gui():
     sub3_max_var = StringVar(value="1")
 
     ttk.Label(params_frame, text="CHL").grid(row=1, column=0, sticky=W)
-    ttk.Entry(params_frame, textvariable=chl_min_var, justify="right").grid(row=1, column=1, sticky="ew", padx=(0, 6))
-    ttk.Entry(params_frame, textvariable=chl_max_var, justify="right").grid(row=1, column=2, sticky="ew")
+    chl_min_entry = ttk.Entry(params_frame, textvariable=chl_min_var, justify="right")
+    chl_min_entry.grid(row=1, column=1, sticky="ew", padx=(0, 6))
+    chl_max_entry = ttk.Entry(params_frame, textvariable=chl_max_var, justify="right")
+    chl_max_entry.grid(row=1, column=2, sticky="ew")
 
     ttk.Label(params_frame, text="CDOM").grid(row=2, column=0, sticky=W)
-    ttk.Entry(params_frame, textvariable=cdom_min_var, justify="right").grid(row=2, column=1, sticky="ew", padx=(0, 6))
-    ttk.Entry(params_frame, textvariable=cdom_max_var, justify="right").grid(row=2, column=2, sticky="ew")
+    cdom_min_entry = ttk.Entry(params_frame, textvariable=cdom_min_var, justify="right")
+    cdom_min_entry.grid(row=2, column=1, sticky="ew", padx=(0, 6))
+    cdom_max_entry = ttk.Entry(params_frame, textvariable=cdom_max_var, justify="right")
+    cdom_max_entry.grid(row=2, column=2, sticky="ew")
 
     ttk.Label(params_frame, text="NAP").grid(row=3, column=0, sticky=W)
-    ttk.Entry(params_frame, textvariable=nap_min_var, justify="right").grid(row=3, column=1, sticky="ew", padx=(0, 6))
-    ttk.Entry(params_frame, textvariable=nap_max_var, justify="right").grid(row=3, column=2, sticky="ew")
+    nap_min_entry = ttk.Entry(params_frame, textvariable=nap_min_var, justify="right")
+    nap_min_entry.grid(row=3, column=1, sticky="ew", padx=(0, 6))
+    nap_max_entry = ttk.Entry(params_frame, textvariable=nap_max_var, justify="right")
+    nap_max_entry.grid(row=3, column=2, sticky="ew")
 
     ttk.Label(params_frame, text="Depth").grid(row=4, column=0, sticky=W)
     depth_min_entry = ttk.Entry(params_frame, textvariable=depth_min_var, justify="right")
@@ -3770,6 +3934,40 @@ def gui():
     sub3_max_entry = ttk.Entry(params_frame, textvariable=sub3_max_var, justify="right")
     sub3_max_entry.grid(row=7, column=2, sticky="ew")
 
+    deep_water_frame = ttk.LabelFrame(params_tab, text="Deep-water priors")
+    deep_water_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+    deep_water_frame.columnconfigure(0, weight=0)
+    deep_water_frame.columnconfigure(1, weight=0)
+    deep_water_frame.columnconfigure(2, weight=1)
+
+    ttk.Button(deep_water_frame, text="Select deep-water polygons", command=open_deep_water_popup).grid(row=0, column=0, sticky="w")
+    ttk.Button(deep_water_frame, text="Clear", command=clear_deep_water_selection).grid(row=0, column=1, sticky="w", padx=(6, 0))
+    ttk.Checkbutton(
+        deep_water_frame,
+        text="Use mean ± sd as bounds instead of fixed values",
+        variable=deep_water_use_sd_var,
+    ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    ttk.Label(
+        deep_water_frame,
+        textvariable=deep_water_summary_var,
+        wraplength=620,
+        justify="left",
+    ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    deep_water_bound_entries = (
+        chl_min_entry,
+        chl_max_entry,
+        cdom_min_entry,
+        cdom_max_entry,
+        nap_min_entry,
+        nap_max_entry,
+    )
+
+    def _update_deep_water_parameter_controls():
+        deep_water_active = bool(deep_water_selection and (deep_water_selection.get("polygons") or []))
+        for widget in deep_water_bound_entries:
+            _set_widget_enabled(widget, not deep_water_active)
+
     for tracked_var in (
         input_image_var,
         output_folder_var,
@@ -3793,6 +3991,7 @@ def gui():
         bathy_tolerance,
     ):
         tracked_var.trace_add("write", update_run_button_state)
+    deep_water_use_sd_var.trace_add("write", _refresh_deep_water_summary)
     input_image_var.trace_add("write", _track_input_field_change)
     output_folder_var.trace_add("write", _track_output_field_change)
     input_image_var.trace_add("write", _sync_input_files_with_entry)
@@ -3820,6 +4019,7 @@ def gui():
     bathy_mode.trace_add("write", update_false_deep_correction_controls)
     update_depth_state()
     update_false_deep_correction_controls()
+    _update_deep_water_parameter_controls()
 
     def load_previous_run_settings():
         nonlocal template_config, spectral_library, compiled_siop, compiled_sensor, input_files
@@ -4016,6 +4216,21 @@ def gui():
                     clear_crop_selection()
             else:
                 clear_crop_selection()
+
+            loaded_deep_water_enabled = _parse_bool_text(_xml_find_text(xml_root, "deep_water_enabled"), False)
+            deep_water_use_sd_var.set(_parse_bool_text(_xml_find_text(xml_root, "deep_water_use_sd_bounds"), False))
+            if loaded_deep_water_enabled:
+                try:
+                    deep_water_polygons_json = _xml_find_text(xml_root, "deep_water_polygons_json", "") or "[]"
+                    loaded_polygons = json.loads(deep_water_polygons_json)
+                    _set_deep_water_selection({
+                        "polygons": loaded_polygons,
+                        "source_path": loaded_images[0] if loaded_images else _xml_find_text(xml_root, "deep_water_source_image", ""),
+                    })
+                except Exception:
+                    clear_deep_water_selection()
+            else:
+                clear_deep_water_selection()
         finally:
             io_change_state["suspend_tracking"] = False
             io_change_state["modified_since_load"] = False
@@ -4218,6 +4433,10 @@ def gui():
         "crop_max_lat": float(crop_selection["bbox"]["max_lat"]) if crop_selection and crop_selection.get("bbox") else "",
         "crop_mask_path": str(crop_selection.get("mask_path", "")) if crop_selection else "",
         "crop_source_image": str(crop_selection.get("source_path", "")) if crop_selection else "",
+        "deep_water_enabled": bool(deep_water_selection),
+        "deep_water_use_sd_bounds": bool(deep_water_use_sd_var.get()),
+        "deep_water_polygons_json": json.dumps((deep_water_selection or {}).get("polygons") or []),
+        "deep_water_source_image": str((deep_water_selection or {}).get("source_path", "")) if deep_water_selection else "",
         "SIOPS": file_iop,
         "sensor_filter": file_sensor,
         "nedr_mode": "fixed",

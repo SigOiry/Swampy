@@ -76,7 +76,7 @@ def _build_html(payload):
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Crop area</title>
+  <title>{payload.get("title", "Spatial selection")}</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
   <style>
@@ -95,6 +95,7 @@ def _build_html(payload):
       flex-direction: column;
       width: 100%;
       height: 100%;
+      position: relative;
     }}
     #header {{
       padding: 12px 14px 8px 14px;
@@ -129,6 +130,10 @@ def _build_html(payload):
       font-size: 12px;
       cursor: pointer;
     }}
+    #toolbar button:disabled {{
+      opacity: 0.55;
+      cursor: default;
+    }}
     #toolbar button.primary {{
       background: #0f766e;
       color: #ffffff;
@@ -153,6 +158,40 @@ def _build_html(payload):
       flex: 1 1 auto;
       min-height: 0;
     }}
+    #startup-overlay {{
+      position: absolute;
+      inset: 0;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: rgba(243, 244, 246, 0.96);
+      color: #1f2937;
+      transition: opacity 0.18s ease-out;
+      pointer-events: all;
+    }}
+    #startup-overlay.hidden {{
+      opacity: 0;
+      pointer-events: none;
+    }}
+    #startup-spinner {{
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      border: 3px solid #cbd5e1;
+      border-top-color: #0f766e;
+      animation: startup-spin 0.9s linear infinite;
+    }}
+    #startup-text {{
+      font-size: 13px;
+      color: #4b5563;
+    }}
+    @keyframes startup-spin {{
+      from {{ transform: rotate(0deg); }}
+      to {{ transform: rotate(360deg); }}
+    }}
     .leaflet-container {{
       background: #e5e7eb;
     }}
@@ -161,15 +200,16 @@ def _build_html(payload):
 <body>
   <div id="app">
     <div id="header">
-      <div id="title">Crop area</div>
+      <div id="title">{payload.get("title", "Spatial selection")}</div>
       <div id="subtitle">
-        {payload.get("preview_description", "Previewing the first selected image.")}. Draw a rectangle to define a geographic bounding box,
-        or import a shapefile mask. The saved selection is stored as coordinates, not pixel indices.
+        {payload.get("subtitle", payload.get("preview_description", "Previewing the first selected image."))}
       </div>
     </div>
     <div id="toolbar">
-      <button id="draw-btn">Draw rectangle</button>
+      <button id="draw-rect-btn">Draw rectangle</button>
       <button id="clear-rect-btn" class="warn">Clear rectangle</button>
+      <button id="draw-poly-btn">Draw polygon</button>
+      <button id="clear-poly-btn" class="warn">Clear polygons</button>
       <button id="import-mask-btn">Import</button>
       <button id="clear-mask-btn" class="warn">Clear mask</button>
       <div class="spacer"></div>
@@ -178,15 +218,24 @@ def _build_html(payload):
     </div>
     <div id="summary"></div>
     <div id="map"></div>
+    <div id="startup-overlay">
+      <div id="startup-spinner"></div>
+      <div id="startup-text">Preparing map tools...</div>
+    </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
   <script>
     const payload = {payload_json};
+    const mode = String(payload.mode || 'crop');
+    const allowRectangle = mode === 'crop' || payload.allow_rectangle === true;
+    const allowPolygons = mode === 'polygons' || payload.allow_polygon === true;
+    const allowMaskImport = payload.allow_mask_import !== false && mode === 'crop';
     let currentBBox = payload.selection && payload.selection.bbox ? payload.selection.bbox : null;
     let currentMaskPath = payload.selection && payload.selection.mask_path ? payload.selection.mask_path : '';
     let currentMaskGeometries = payload.selection && payload.selection.mask_geometries ? payload.selection.mask_geometries : [];
+    let currentPolygons = payload.selection && Array.isArray(payload.selection.polygons) ? payload.selection.polygons : [];
 
     const imageBounds = [
       [payload.lat_min, payload.lon_min],
@@ -196,10 +245,15 @@ def _build_html(payload):
     const map = L.map('map', {{
       crs: L.CRS.EPSG4326,
       zoomSnap: 0,
-      attributionControl: false
+      attributionControl: false,
+      zoomAnimation: false,
+      fadeAnimation: false,
+      markerZoomAnimation: false,
+      inertia: false,
+      preferCanvas: true
     }});
 
-    L.imageOverlay(payload.image_url || payload.image_data_url, imageBounds, {{
+    const imageOverlay = L.imageOverlay(payload.image_url || payload.image_data_url, imageBounds, {{
       interactive: false,
       opacity: 1.0
     }}).addTo(map);
@@ -208,7 +262,44 @@ def _build_html(payload):
     L.control.scale({{ metric: true, imperial: false }}).addTo(map);
 
     const rectangleGroup = new L.FeatureGroup().addTo(map);
+    const polygonGroup = new L.FeatureGroup().addTo(map);
     let maskLayer = null;
+    let startupReleased = false;
+
+    function setInteractionEnabled(enabled) {{
+      const idsToToggle = [
+        'draw-rect-btn',
+        'clear-rect-btn',
+        'draw-poly-btn',
+        'clear-poly-btn',
+        'import-mask-btn',
+        'clear-mask-btn',
+        'ok-btn',
+      ];
+      idsToToggle.forEach(function(id) {{
+        const element = document.getElementById(id);
+        if (element) {{
+          element.disabled = !enabled;
+        }}
+      }});
+      if (enabled) {{
+        map.dragging.enable();
+        map.touchZoom.enable();
+        map.doubleClickZoom.enable();
+        map.scrollWheelZoom.enable();
+        map.boxZoom.enable();
+        map.keyboard.enable();
+      }} else {{
+        map.dragging.disable();
+        map.touchZoom.disable();
+        map.doubleClickZoom.disable();
+        map.scrollWheelZoom.disable();
+        map.boxZoom.disable();
+        map.keyboard.disable();
+      }}
+    }}
+
+    setInteractionEnabled(false);
 
     function formatSummary() {{
       const parts = [];
@@ -229,7 +320,10 @@ def _build_html(payload):
         const split = currentMaskPath.split(/[/\\\\]/);
         parts.push(`Mask ${{split[split.length - 1]}}`);
       }}
-      document.getElementById('summary').textContent = parts.length ? parts.join(' | ') : 'Full scene';
+      if (currentPolygons.length) {{
+        parts.push(`${{currentPolygons.length}} polygon(s)`);
+      }}
+      document.getElementById('summary').textContent = parts.length ? parts.join(' | ') : (mode === 'polygons' ? 'No deep-water polygons selected' : 'Full scene');
     }}
 
     function bboxFromLeaflet(bounds) {{
@@ -258,6 +352,38 @@ def _build_html(payload):
       formatSummary();
     }}
 
+    function polygonsFromGroup() {{
+      const geometries = [];
+      polygonGroup.eachLayer(function(layer) {{
+        const geojson = layer.toGeoJSON();
+        if (geojson && geojson.geometry) {{
+          geometries.push(geojson.geometry);
+        }}
+      }});
+      currentPolygons = geometries;
+      formatSummary();
+    }}
+
+    function setPolygons(geometries) {{
+      polygonGroup.clearLayers();
+      currentPolygons = [];
+      (geometries || []).forEach(function(geometry) {{
+        const layer = L.geoJSON(geometry, {{
+          style: function() {{
+            return {{
+              color: '#2563eb',
+              weight: 2,
+              fillOpacity: 0.08
+            }};
+          }}
+        }});
+        layer.eachLayer(function(innerLayer) {{
+          polygonGroup.addLayer(innerLayer);
+        }});
+      }});
+      polygonsFromGroup();
+    }}
+
     function setMask(geometries, path) {{
       if (maskLayer) {{
         map.removeLayer(maskLayer);
@@ -281,11 +407,34 @@ def _build_html(payload):
 
     map.on(L.Draw.Event.CREATED, function(event) {{
       const layer = event.layer;
-      const bbox = bboxFromLeaflet(layer.getBounds());
-      setRectangle(bbox);
+      if (event.layerType === 'rectangle') {{
+        const bbox = bboxFromLeaflet(layer.getBounds());
+        setRectangle(bbox);
+      }} else if (event.layerType === 'polygon') {{
+        polygonGroup.addLayer(layer);
+        polygonsFromGroup();
+      }}
     }});
 
-    document.getElementById('draw-btn').addEventListener('click', function() {{
+    map.on(L.Draw.Event.EDITED, function() {{
+      if (allowRectangle && rectangleGroup.getLayers().length) {{
+        const rectLayer = rectangleGroup.getLayers()[0];
+        currentBBox = bboxFromLeaflet(rectLayer.getBounds());
+      }}
+      if (allowPolygons) {{
+        polygonsFromGroup();
+      }}
+    }});
+
+    map.on(L.Draw.Event.DELETED, function() {{
+      if (!rectangleGroup.getLayers().length) {{
+        currentBBox = null;
+      }}
+      polygonsFromGroup();
+      formatSummary();
+    }});
+
+    document.getElementById('draw-rect-btn').addEventListener('click', function() {{
       const drawer = new L.Draw.Rectangle(map, {{
         shapeOptions: {{
           color: '#ff3366',
@@ -299,7 +448,26 @@ def _build_html(payload):
       setRectangle(null);
     }});
 
+    document.getElementById('draw-poly-btn').addEventListener('click', function() {{
+      const drawer = new L.Draw.Polygon(map, {{
+        allowIntersection: false,
+        showArea: false,
+        shapeOptions: {{
+          color: '#2563eb',
+          weight: 2
+        }}
+      }});
+      drawer.enable();
+    }});
+
+    document.getElementById('clear-poly-btn').addEventListener('click', function() {{
+      setPolygons([]);
+    }});
+
     document.getElementById('import-mask-btn').addEventListener('click', async function() {{
+      if (!allowMaskImport) {{
+        return;
+      }}
       if (!window.pywebview || !window.pywebview.api) {{
         return;
       }}
@@ -318,6 +486,24 @@ def _build_html(payload):
       setMask([], '');
     }});
 
+    function configureToolbar() {{
+      document.getElementById('draw-rect-btn').style.display = allowRectangle ? '' : 'none';
+      document.getElementById('clear-rect-btn').style.display = allowRectangle ? '' : 'none';
+      document.getElementById('draw-poly-btn').style.display = allowPolygons ? '' : 'none';
+      document.getElementById('clear-poly-btn').style.display = allowPolygons ? '' : 'none';
+      document.getElementById('import-mask-btn').style.display = allowMaskImport ? '' : 'none';
+      document.getElementById('clear-mask-btn').style.display = allowMaskImport ? '' : 'none';
+      if (payload.enable_edit_toolbar) {{
+        new L.Control.Draw({{
+          draw: false,
+          edit: {{
+            featureGroup: new L.FeatureGroup([rectangleGroup, polygonGroup]),
+            remove: true
+          }}
+        }});
+      }}
+    }}
+
     document.getElementById('cancel-btn').addEventListener('click', async function() {{
       if (window.pywebview && window.pywebview.api) {{
         await window.pywebview.api.cancel();
@@ -328,7 +514,8 @@ def _build_html(payload):
       if (window.pywebview && window.pywebview.api) {{
         await window.pywebview.api.accept_selection({{
           bbox: currentBBox,
-          mask_path: currentMaskPath
+          mask_path: currentMaskPath,
+          polygons: currentPolygons
         }});
       }}
     }});
@@ -341,6 +528,51 @@ def _build_html(payload):
     if (currentMaskGeometries.length) {{
       setMask(currentMaskGeometries, currentMaskPath);
     }}
+    if (currentPolygons.length) {{
+      setPolygons(currentPolygons);
+    }}
+    configureToolbar();
+
+    const startupOverlay = document.getElementById('startup-overlay');
+    let startupTimerElapsed = false;
+    let mapReady = false;
+
+    function releaseStartupOverlay() {{
+      if (startupReleased || !startupTimerElapsed || !mapReady) {{
+        return;
+      }}
+      startupReleased = true;
+      setInteractionEnabled(true);
+      window.setTimeout(function() {{
+        map.invalidateSize(true);
+      }}, 40);
+      startupOverlay.classList.add('hidden');
+      window.setTimeout(function() {{
+        if (startupOverlay && startupOverlay.parentNode) {{
+          startupOverlay.parentNode.removeChild(startupOverlay);
+        }}
+      }}, 220);
+    }}
+
+    map.whenReady(function() {{
+      mapReady = true;
+      releaseStartupOverlay();
+    }});
+
+    imageOverlay.on('load', function() {{
+      mapReady = true;
+      releaseStartupOverlay();
+    }});
+
+    imageOverlay.on('error', function() {{
+      mapReady = true;
+      releaseStartupOverlay();
+    }});
+
+    window.setTimeout(function() {{
+      startupTimerElapsed = true;
+      releaseStartupOverlay();
+    }}, 1000);
   </script>
 </body>
 </html>
