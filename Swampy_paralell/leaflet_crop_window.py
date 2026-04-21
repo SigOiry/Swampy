@@ -2,11 +2,14 @@
 import json
 import os
 import sys
+import threading
+import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename
-
-import webview
+from urllib.parse import urlparse
 
 
 def _load_vector_mask_geometries(path):
@@ -35,52 +38,25 @@ def _load_vector_mask_geometries(path):
             geometry = feature.get("geometry")
             if not geometry:
                 continue
-            transformed = _transform_with_optional_point_buffer(geometry, src_crs, "EPSG:4326")
-            geometries.append(transformed)
+            geometries.append(_transform_with_optional_point_buffer(geometry, src_crs, "EPSG:4326"))
     if not geometries:
         raise RuntimeError("The shapefile does not contain any valid geometry.")
     return geometries
 
 
-class CropWindowApi:
-    def __init__(self):
-        self.window = None
-        self.result = {"cancelled": True}
-
-    def choose_mask(self):
-        dialog_root = Tk()
-        dialog_root.withdraw()
-        dialog_root.attributes("-topmost", True)
-        try:
-            path = askopenfilename(
-                parent=dialog_root,
-                title="Choose shapefile mask",
-                filetypes=[("Shapefile", "*.shp"), ("All files", "*.*")],
-            )
-        finally:
-            dialog_root.destroy()
-        if not path:
-            return {"ok": False, "cancelled": True}
-        try:
-            geometries = _load_vector_mask_geometries(path)
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        return {"ok": True, "path": path, "geometries": geometries}
-
-    def accept_selection(self, selection):
-        self.result = {
-            "cancelled": False,
-            "selection": selection,
-        }
-        if self.window is not None:
-            self.window.destroy()
-        return True
-
-    def cancel(self):
-        self.result = {"cancelled": True}
-        if self.window is not None:
-            self.window.destroy()
-        return True
+def _choose_mask_file():
+    dialog_root = Tk()
+    dialog_root.withdraw()
+    dialog_root.attributes("-topmost", True)
+    try:
+        path = askopenfilename(
+            parent=dialog_root,
+            title="Choose shapefile mask",
+            filetypes=[("Shapefile", "*.shp"), ("All files", "*.*")],
+        )
+    finally:
+        dialog_root.destroy()
+    return path
 
 
 def _build_html(payload):
@@ -283,6 +259,7 @@ def _build_html(payload):
     const polygonGroup = new L.FeatureGroup().addTo(map);
     let maskLayer = null;
     let startupReleased = false;
+    let selectionSubmitted = false;
     let rectangleDrawActive = false;
     let rectangleStartLatLng = null;
     let rectangleDraftLayer = null;
@@ -321,6 +298,14 @@ def _build_html(payload):
     }}
 
     setInteractionEnabled(false);
+
+    function postJson(path, body) {{
+      return fetch(path, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(body || {{}})
+      }}).then(response => response.json());
+    }}
 
     function formatSummary() {{
       const parts = [];
@@ -466,24 +451,6 @@ def _build_html(payload):
           polygonsFromGroup();
         }}
       }});
-
-      map.on(L.Draw.Event.EDITED, function() {{
-        if (allowRectangle && rectangleGroup.getLayers().length) {{
-          const rectLayer = rectangleGroup.getLayers()[0];
-          currentBBox = bboxFromLeaflet(rectLayer.getBounds());
-        }}
-        if (allowPolygons) {{
-          polygonsFromGroup();
-        }}
-      }});
-
-      map.on(L.Draw.Event.DELETED, function() {{
-        if (!rectangleGroup.getLayers().length) {{
-          currentBBox = null;
-        }}
-        polygonsFromGroup();
-        formatSummary();
-      }});
     }}
 
     map.on('click', function(event) {{
@@ -562,10 +529,7 @@ def _build_html(payload):
       if (!allowMaskImport) {{
         return;
       }}
-      if (!window.pywebview || !window.pywebview.api) {{
-        return;
-      }}
-      const response = await window.pywebview.api.choose_mask();
+      const response = await postJson('/choose-mask', {{}});
       if (!response || response.cancelled) {{
         return;
       }}
@@ -587,30 +551,27 @@ def _build_html(payload):
       document.getElementById('clear-poly-btn').style.display = allowPolygons ? '' : 'none';
       document.getElementById('import-mask-btn').style.display = allowMaskImport ? '' : 'none';
       document.getElementById('clear-mask-btn').style.display = allowMaskImport ? '' : 'none';
-      if (payload.enable_edit_toolbar && hasLeafletDraw) {{
-        new L.Control.Draw({{
-          draw: false,
-          edit: {{
-            featureGroup: new L.FeatureGroup([rectangleGroup, polygonGroup]),
-            remove: true
-          }}
-        }});
-      }}
     }}
 
     document.getElementById('cancel-btn').addEventListener('click', async function() {{
-      if (window.pywebview && window.pywebview.api) {{
-        await window.pywebview.api.cancel();
-      }}
+      selectionSubmitted = true;
+      await postJson('/cancel', {{}});
+      document.body.innerHTML = '<p style="font-family: Segoe UI, sans-serif; padding: 24px;">Selection cancelled. You can close this tab.</p>';
     }});
 
     document.getElementById('ok-btn').addEventListener('click', async function() {{
-      if (window.pywebview && window.pywebview.api) {{
-        await window.pywebview.api.accept_selection({{
-          bbox: currentBBox,
-          mask_path: currentMaskPath,
-          polygons: currentPolygons
-        }});
+      selectionSubmitted = true;
+      await postJson('/accept', {{
+        bbox: currentBBox,
+        mask_path: currentMaskPath,
+        polygons: currentPolygons
+      }});
+      document.body.innerHTML = '<p style="font-family: Segoe UI, sans-serif; padding: 24px;">Selection saved. You can close this tab.</p>';
+    }});
+
+    window.addEventListener('beforeunload', function() {{
+      if (!selectionSubmitted && navigator.sendBeacon) {{
+        navigator.sendBeacon('/cancel', new Blob(['{{}}'], {{ type: 'application/json' }}));
       }}
     }});
 
@@ -673,6 +634,92 @@ def _build_html(payload):
 """
 
 
+class _SelectionServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+
+def _make_handler(payload, response_path, stop_event, preview_image_path):
+    html = _build_html(payload).encode("utf-8")
+    image_path = Path(preview_image_path) if preview_image_path else None
+
+    class SelectionHandler(BaseHTTPRequestHandler):
+        def log_message(self, _format, *_args):
+            return
+
+        def _send_json(self, data, status=200):
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path in {"/", "/index.html"}:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html)))
+                self.end_headers()
+                self.wfile.write(html)
+                return
+            if parsed.path == "/preview":
+                if image_path is None or not image_path.exists():
+                    self.send_error(404)
+                    return
+                suffix = image_path.suffix.lower()
+                if suffix == ".webp":
+                    content_type = "image/webp"
+                elif suffix in {".jpg", ".jpeg"}:
+                    content_type = "image/jpeg"
+                else:
+                    content_type = "image/png"
+                data = image_path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            self.send_error(404)
+
+        def do_POST(self):
+            parsed = urlparse(self.path)
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                data = json.loads(body.decode("utf-8")) if body else {}
+            except Exception:
+                data = {}
+            if parsed.path == "/choose-mask":
+                path = _choose_mask_file()
+                if not path:
+                    self._send_json({"ok": False, "cancelled": True})
+                    return
+                try:
+                    geometries = _load_vector_mask_geometries(path)
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)})
+                    return
+                self._send_json({"ok": True, "path": path, "geometries": geometries})
+                return
+            if parsed.path == "/accept":
+                with open(response_path, "w", encoding="utf-8") as response_file:
+                    json.dump({"cancelled": False, "selection": data}, response_file)
+                self._send_json({"ok": True})
+                stop_event.set()
+                return
+            if parsed.path == "/cancel":
+                with open(response_path, "w", encoding="utf-8") as response_file:
+                    json.dump({"cancelled": True}, response_file)
+                self._send_json({"ok": True})
+                stop_event.set()
+                return
+            self.send_error(404)
+
+    return SelectionHandler
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("Usage: leaflet_crop_window.py <request.json> <response.json>")
@@ -682,30 +729,30 @@ def main():
 
     with open(request_path, "r", encoding="utf-8") as request_file:
         payload = json.load(request_file)
-    image_url = str(payload.get("image_url") or "").strip()
-    if image_url and os.path.exists(image_url):
-        payload["image_url"] = Path(image_url).resolve().as_uri()
+    preview_image_path = str(payload.get("image_url") or "").strip()
+    if preview_image_path:
+        payload["image_url"] = "/preview"
 
-    api = CropWindowApi()
-    html = _build_html(payload)
-    html_path = Path(response_path).with_name("leaflet_crop_window.html")
-    with open(html_path, "w", encoding="utf-8") as html_file:
-        html_file.write(html)
-    api.window = webview.create_window(
-        payload.get("title", "Crop area"),
-        url=html_path.resolve().as_uri(),
-        js_api=api,
-        width=1200,
-        height=860,
-        min_size=(900, 680),
+    stop_event = threading.Event()
+    server = _SelectionServer(
+        ("127.0.0.1", 0),
+        _make_handler(payload, response_path, stop_event, preview_image_path),
     )
-    try:
-        webview.start(gui='edgechromium', debug=False)
-    except Exception:
-        webview.start(debug=False)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    webbrowser.open(url, new=1, autoraise=True)
 
-    with open(response_path, "w", encoding="utf-8") as response_file:
-        json.dump(api.result, response_file)
+    try:
+        while not stop_event.is_set():
+            time.sleep(0.1)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    if not os.path.exists(response_path):
+        with open(response_path, "w", encoding="utf-8") as response_file:
+            json.dump({"cancelled": True}, response_file)
 
 
 if __name__ == "__main__":

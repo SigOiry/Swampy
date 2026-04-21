@@ -21,9 +21,6 @@ dependencies:
   - tqdm
   - numba
   - tk  # tkinter for the GUI
-  - pip
-  - pip:
-      - pywebview
   # Optional: if you hit proj/gdal conflicts on Windows, try pinning
   # - gdal
   # - proj

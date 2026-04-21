@@ -3743,7 +3743,7 @@ def gui():
     flags_frame.columnconfigure(1, weight=1)
 
     above_rrs_flag = BooleanVar(value=True)
-    shallow_flag = BooleanVar(value=True)
+    shallow_flag = BooleanVar(value=False)
     false_deep_correction_flag = BooleanVar(value=False)
     optimize_initial_guesses_flag = BooleanVar(value=False)
     five_initial_guess_testing_flag = BooleanVar(value=False)

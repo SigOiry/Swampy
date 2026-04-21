@@ -3432,7 +3432,7 @@ if __name__ == "__main__":
             """the three flags"""
             above_rrs_flag = _coerce_bool(root.get('rrs_flag', True))  # if above or below rrs
             relaxed = _coerce_bool(root.get('relaxed', False))  # relaxed constraints for substrates
-            shallow_flag = _coerce_bool(root.get('shallow', True))  # if this shallow water
+            shallow_flag = _coerce_bool(root.get('shallow', False))  # if this shallow water
             optimize_initial_guesses = _coerce_bool(root.get('optimize_initial_guesses', False))
             use_five_initial_guesses = _coerce_bool(root.get('use_five_initial_guesses', False))
             initial_guess_debug = _coerce_bool(root.get('initial_guess_debug', False))
