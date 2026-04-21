@@ -429,6 +429,49 @@ def _mapping_lookup_from_payload(mapping):
     return lookup
 
 
+def _build_sensor_band_mapping_payload(template, selected_indices, image_band_info, lookup, mode, tolerance_nm):
+    if template is None or not image_band_info:
+        return None
+    source_bands = list(image_band_info.get("bands") or [])
+    band_by_index = {int(band["index"]): band for band in template.get("bands", [])}
+    sensor_band_indices = []
+    sensor_band_centers = []
+    image_band_indices = []
+    image_band_labels = []
+    image_band_wavelengths = []
+    for sensor_index in selected_indices:
+        sensor_index = int(sensor_index)
+        if sensor_index not in lookup:
+            continue
+        source_index = int(lookup[sensor_index])
+        if source_index < 0 or source_index >= len(source_bands):
+            continue
+        sensor_band = band_by_index.get(sensor_index)
+        if sensor_band is None:
+            continue
+        source_band = source_bands[source_index]
+        sensor_band_indices.append(sensor_index)
+        sensor_band_centers.append(float(sensor_band["center"]))
+        image_band_indices.append(source_index)
+        image_band_labels.append(source_band["label"])
+        image_band_wavelengths.append(source_band.get("wavelength"))
+    if not image_band_indices:
+        return None
+    return {
+        "mode": str(mode),
+        "tolerance_nm": float(tolerance_nm),
+        "source_kind": image_band_info.get("source_kind", ""),
+        "source_name": image_band_info.get("source_name", ""),
+        "source_band_labels": list(image_band_info.get("labels") or []),
+        "source_band_wavelengths": list(image_band_info.get("wavelengths") or []),
+        "sensor_band_indices": sensor_band_indices,
+        "sensor_band_centers": sensor_band_centers,
+        "image_band_indices": image_band_indices,
+        "image_band_labels": image_band_labels,
+        "image_band_wavelengths": image_band_wavelengths,
+    }
+
+
 def _clone_sensor_band_mapping_config(mapping):
     if not mapping:
         return None
@@ -1222,6 +1265,11 @@ def gui():
         },
         "band_mapping_configs": {},
     }
+    image_band_info_cache = {
+        "path": None,
+        "info": None,
+        "error": "",
+    }
 
     def select_file_im():
         files = askopenfilenames(
@@ -1236,8 +1284,8 @@ def gui():
         else:
             input_files = []
             input_image_var.set("")
-        sensor_state["band_mapping_configs"].clear()
-        update_sensor_ui()
+        image_band_info_cache.update({"path": None, "info": None, "error": ""})
+        _auto_update_sensor_mapping_for_current_image(show_warning=True)
 
     def select_folder():
         folder = askdirectory(parent=root, title="Choose the output folder")
@@ -1355,10 +1403,15 @@ def gui():
             if mapping_config.get("image_band_indices"):
                 mapping_mode = str(mapping_config.get("mode", "manual")).strip().lower()
                 mapping_count = len(mapping_config.get("image_band_indices") or [])
+                unmatched_count = max(0, len(centers) - mapping_count)
                 if mapping_mode == "manual":
                     mapping_suffix = f" Explicit input-band mapping set for {mapping_count} band(s)."
                 else:
                     mapping_suffix = f" Input bands auto-linked for {mapping_count} band(s)."
+                if unmatched_count:
+                    mapping_suffix += f" WARNING: {unmatched_count} selected band(s) are unmatched."
+            elif _current_input_file_list():
+                mapping_suffix = " WARNING: selected sensor bands are not linked to input image bands."
             sensor_summary_var.set(
                 f"{current_sensor['sensor_name']}: {len(centers)} band(s) selected "
                 f"({_format_sensor_centers(centers)}).{mapping_suffix}"
@@ -1384,6 +1437,89 @@ def gui():
         if input_files:
             return [path for path in input_files if str(path).strip()]
         return [text] if text else []
+
+    def _get_current_image_band_info():
+        current_files = _current_input_file_list()
+        image_path = current_files[0] if current_files else ""
+        if not image_path or not os.path.isfile(image_path):
+            image_band_info_cache.update({"path": image_path, "info": None, "error": ""})
+            return None, ""
+        if image_band_info_cache["path"] == image_path:
+            return image_band_info_cache["info"], image_band_info_cache["error"]
+        try:
+            info = _load_input_image_band_info(image_path)
+            image_band_info_cache.update({"path": image_path, "info": info, "error": ""})
+            return info, ""
+        except Exception as exc:
+            error = str(exc)
+            image_band_info_cache.update({"path": image_path, "info": None, "error": error})
+            return None, error
+
+    def _sensor_band_labels_for_indices(template, indices, limit=8):
+        band_by_index = {int(band["index"]): band for band in template.get("bands", [])} if template else {}
+        labels = []
+        for sensor_index in indices:
+            band = band_by_index.get(int(sensor_index))
+            labels.append(band["label"] if band is not None else f"Band {int(sensor_index) + 1}")
+        if len(labels) > limit:
+            return ", ".join(labels[:limit]) + f", and {len(labels) - limit} more"
+        return ", ".join(labels)
+
+    def _mapping_missing_sensor_indices(template, selected_indices, mapping):
+        lookup = _mapping_lookup_from_payload(mapping or {})
+        return [int(sensor_index) for sensor_index in selected_indices if int(sensor_index) not in lookup]
+
+    def _auto_update_sensor_mapping_for_current_image(show_warning=False):
+        image_band_info, image_band_error = _get_current_image_band_info()
+        sensor_name = sensor_state["sensor_name"]
+        template = sensor_templates.get(sensor_name)
+        selected_indices = list(sensor_state["selected_indices"].get(sensor_name, []))
+
+        if image_band_error:
+            sensor_state["band_mapping_configs"].pop(sensor_name, None)
+            update_sensor_ui()
+            if show_warning:
+                messagebox.showwarning(
+                    "Band matching unavailable",
+                    "The selected input image could not be inspected for sensor-band matching.\n\n"
+                    f"{image_band_error}",
+                    parent=root,
+                )
+            return
+
+        if template is None or not image_band_info or not selected_indices:
+            sensor_state["band_mapping_configs"].pop(sensor_name, None)
+            update_sensor_ui()
+            return
+
+        lookup, unmatched = _auto_match_sensor_band_lookup(
+            template,
+            selected_indices,
+            image_band_info,
+            tolerance_nm=10.0,
+        )
+        mapping = _build_sensor_band_mapping_payload(
+            template,
+            selected_indices,
+            image_band_info,
+            lookup,
+            "auto",
+            10.0,
+        )
+        if mapping:
+            sensor_state["band_mapping_configs"][sensor_name] = mapping
+        else:
+            sensor_state["band_mapping_configs"].pop(sensor_name, None)
+        update_sensor_ui()
+
+        if show_warning and unmatched:
+            messagebox.showwarning(
+                "Incomplete band matching",
+                "Some selected sensor bands do not have a matching input image band within 10 nm.\n\n"
+                f"Unmatched: {_sensor_band_labels_for_indices(template, unmatched)}\n\n"
+                "Open Sensor Configuration to change the selected bands or adjust the mapping manually.",
+                parent=root,
+            )
 
     def _normalise_crop_selection(selection):
         if not selection:
@@ -1574,6 +1710,7 @@ def gui():
         io_change_state["last_input_value"] = current_value
         if not io_change_state["suspend_tracking"]:
             io_change_state["modified_since_load"] = True
+            image_band_info_cache.update({"path": None, "info": None, "error": ""})
             if sensor_state["band_mapping_configs"]:
                 sensor_state["band_mapping_configs"].clear()
                 update_sensor_ui()
@@ -1749,6 +1886,35 @@ def gui():
         selection["source_path"] = first_image
         _set_deep_water_selection(selection)
 
+    def _get_sensor_mapping_validation_error():
+        image_band_info, image_band_error = _get_current_image_band_info()
+        if image_band_error:
+            return f"Unable to inspect input image bands for sensor matching: {image_band_error}"
+        if not image_band_info:
+            return None
+
+        sensor_name = sensor_state["sensor_name"]
+        template = sensor_templates.get(sensor_name)
+        if template is None:
+            return None
+
+        selected_indices = list(sensor_state["selected_indices"].get(sensor_name, []))
+        mapping = sensor_state["band_mapping_configs"].get(sensor_name)
+        if mapping and not _image_band_info_matches_mapping(image_band_info, mapping):
+            return "Sensor band mapping was created for a different input image. Re-open Sensor Configuration or reselect the image."
+
+        missing_indices = _mapping_missing_sensor_indices(template, selected_indices, mapping)
+        if missing_indices:
+            return (
+                "Some selected sensor bands are not matched to input image bands: "
+                f"{_sensor_band_labels_for_indices(template, missing_indices)}."
+            )
+
+        image_band_indices = list((mapping or {}).get("image_band_indices") or [])
+        if len(set(image_band_indices)) != len(image_band_indices):
+            return "Sensor band mapping uses the same input image band more than once."
+        return None
+
     def _get_form_validation_error():
         current_files = _current_input_file_list()
         if not current_files:
@@ -1787,6 +1953,10 @@ def gui():
             build_current_sensor()
         except Exception as exc:
             return f"Invalid sensor setup: {exc}"
+
+        sensor_mapping_error = _get_sensor_mapping_validation_error()
+        if sensor_mapping_error:
+            return sensor_mapping_error
 
         numeric_pairs = [
             (chl_min_var, chl_max_var, "CHL"),
@@ -2281,43 +2451,14 @@ def gui():
                 local_mapping_state.pop(sensor_name, None)
 
         def _build_mapping_payload_from_lookup(template, selected_indices, lookup, mode, tolerance_nm):
-            if template is None or not current_image_band_info:
-                return None
-            sensor_band_indices = []
-            sensor_band_centers = []
-            image_band_indices = []
-            image_band_labels = []
-            image_band_wavelengths = []
-            for sensor_index in selected_indices:
-                if int(sensor_index) not in lookup:
-                    continue
-                source_index = int(lookup[int(sensor_index)])
-                if source_index < 0 or source_index >= len(current_image_band_info["bands"]):
-                    continue
-                sensor_band = next((band for band in template["bands"] if int(band["index"]) == int(sensor_index)), None)
-                if sensor_band is None:
-                    continue
-                source_band = current_image_band_info["bands"][source_index]
-                sensor_band_indices.append(int(sensor_index))
-                sensor_band_centers.append(float(sensor_band["center"]))
-                image_band_indices.append(int(source_index))
-                image_band_labels.append(source_band["label"])
-                image_band_wavelengths.append(source_band.get("wavelength"))
-            if not image_band_indices:
-                return None
-            return {
-                "mode": str(mode),
-                "tolerance_nm": float(tolerance_nm),
-                "source_kind": current_image_band_info.get("source_kind", ""),
-                "source_name": current_image_band_info.get("source_name", ""),
-                "source_band_labels": list(current_image_band_info.get("labels") or []),
-                "source_band_wavelengths": list(current_image_band_info.get("wavelengths") or []),
-                "sensor_band_indices": sensor_band_indices,
-                "sensor_band_centers": sensor_band_centers,
-                "image_band_indices": image_band_indices,
-                "image_band_labels": image_band_labels,
-                "image_band_wavelengths": image_band_wavelengths,
-            }
+            return _build_sensor_band_mapping_payload(
+                template,
+                selected_indices,
+                current_image_band_info,
+                lookup,
+                mode,
+                tolerance_nm,
+            )
 
         def _ensure_mapping_state_for_current_sensor(force_auto=False):
             template = current_template()
@@ -2338,7 +2479,7 @@ def gui():
                 lookup = _mapping_lookup_from_payload(mapping)
                 mode = str(mapping.get("mode", "manual")).strip().lower() or "manual"
 
-            if force_auto or not mapping:
+            if force_auto or not mapping or mode == "auto":
                 lookup, unmatched = _auto_match_sensor_band_lookup(
                     template,
                     selected_indices,
@@ -2355,6 +2496,22 @@ def gui():
                 return
 
             filtered_lookup = {int(key): int(value) for key, value in lookup.items() if int(key) in selected_indices}
+            auto_lookup, _unmatched = _auto_match_sensor_band_lookup(
+                template,
+                selected_indices,
+                current_image_band_info,
+                tolerance_nm=tolerance_nm,
+            )
+            used_source_indices = set(filtered_lookup.values())
+            for sensor_index in selected_indices:
+                sensor_index = int(sensor_index)
+                if sensor_index in filtered_lookup:
+                    continue
+                auto_source_index = auto_lookup.get(sensor_index)
+                if auto_source_index is None or int(auto_source_index) in used_source_indices:
+                    continue
+                filtered_lookup[sensor_index] = int(auto_source_index)
+                used_source_indices.add(int(auto_source_index))
             mapping = _build_mapping_payload_from_lookup(template, selected_indices, filtered_lookup, mode, tolerance_nm)
             _set_current_local_mapping(mapping)
             mapping_tolerance_var.set(str(int(tolerance_nm)) if float(tolerance_nm).is_integer() else f"{tolerance_nm:g}")
@@ -2399,11 +2556,18 @@ def gui():
             unmatched_count = max(0, len(selected_indices) - matched_count)
             source_count = int(current_image_band_info.get("band_count", 0))
             source_name = current_image_band_info.get("source_name", "input image")
-            mapping_status_var.set(
+            status_text = (
                 f"Detected {source_count} input image band(s) from '{source_name}'. "
                 f"{matched_count} selected sensor band(s) are linked and {unmatched_count} remain unmatched. "
                 f"Mode: {mode}."
             )
+            if unmatched_count:
+                missing_indices = _mapping_missing_sensor_indices(template, selected_indices, mapping)
+                status_text += (
+                    "\nWARNING: the following selected sensor band(s) do not have a matching input image band: "
+                    f"{_sensor_band_labels_for_indices(template, missing_indices)}."
+                )
+            mapping_status_var.set(status_text)
 
             use_summary_view = bool(current_image_band_info.get("is_hyperspectral")) or len(selected_indices) > 15
             if use_summary_view:
