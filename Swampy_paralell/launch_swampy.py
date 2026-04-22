@@ -9,10 +9,10 @@ from future.backports.datetime import timedelta
 """ This version os SWAMpy run in Python3.6 without the need of a snappy installation.
  If no arguments are provided from command line, all inputs will be chosen from GUI.
 If the "-f" arguments will be provided an xml file, containing all the inputs, must be chosen. 
-The input image file must be a .nc file, containing only lat, lon, and rrs band. 
-Lat and lon should be always name lat and lon, while the rrs band must be alphabetically ordered
- to be correctly associated to the right wavelenght of the sensor filter
- (for example "band_1, band_2, band_3..." or "rrs410, rrs443, rrs488..." will be correctly recognized by the model).   
+The input image file can be a NetCDF or HDF product containing lat, lon, and
+reflectance bands. Lat and lon should be named clearly, while reflectance bands
+can be stacked in one cube or stored as wavelength-named 2D layers such as
+"band_1, band_2", "rrs410, rrs443", or Polymer "Rw443, Rw490" variables.
 If "-p" is set to True then the post-proc will be performed
 to calculate additional spectra and parameters. 
 
@@ -224,6 +224,11 @@ from scipy.spatial import cKDTree
 from rasterio.transform import from_bounds, Affine
 from rasterio.crs import CRS
 from rasterio.windows import Window
+
+try:
+    import image_io
+except ImportError:  # pragma: no cover - fallback when imported as a package
+    from Swampy_paralell import image_io
 
 _SPLIT_TARGET_PIXELS = 4_000_000  # approx pixels per chunk when splitting
 _SPLIT_MIN_ROWS = 128
@@ -819,51 +824,27 @@ def _suggest_chunk_rows(height, width, target_pixels=_SPLIT_TARGET_PIXELS, min_r
 
 def _is_rrs_band_variable(var_name):
     """Return True if the variable name looks like a single-band RRS layer."""
-    lowered = var_name.lower()
-    patterns = ('rrs', 'rho', 'reflectance', 'band')
-    return lowered.startswith(patterns)
+    return image_io.is_rrs_band_variable(var_name)
 
 
 def _is_auxiliary_scene_variable(var_name):
     """Return True for common 2D QA / mask / geometry layers that should be skipped quietly."""
-    lowered = var_name.lower()
-    tokens = (
-        'flag',
-        'mask',
-        'quality',
-        'class',
-        'cloud',
-        'glint',
-        'angle',
-        'uncert',
-        'bit',
-    )
-    return any(token in lowered for token in tokens)
+    return image_io.is_auxiliary_scene_variable(var_name)
 
 
 def _looks_like_wavelength_var(var_name):
     """Heuristic to detect 1D wavelength coordinate variables."""
-    lowered = var_name.lower()
-    return any(token in lowered for token in ('wave', 'wl', 'lambda', 'band'))
+    return image_io.looks_like_wavelength_var(var_name)
 
 
-def _extract_wavelength(var_name):
+def _extract_wavelength(var_name, variable=None):
     """Return the numeric wavelength embedded in a variable name, if any."""
-    match = re.search(r'(\d+(?:\.\d+)?)', var_name)
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return None
-    return None
+    return image_io.extract_wavelength(var_name, variable)
 
 
 def _band_sort_key(var_name):
     """Sort spectral layers numerically when possible."""
-    value = _extract_wavelength(var_name)
-    if value is not None:
-        return value
-    return var_name.lower()
+    return image_io.band_sort_key(var_name)
 
 
 def _align_rrs_to_filter(rrs, source_wavelengths, target_wavelengths):
@@ -1005,7 +986,7 @@ def _extract_regular_lonlat_center_axes(lat, lon, shape_geo):
 
 
 def _extract_input_grid_metadata(source_product, width, height, sample_var_name=None):
-    """Extract exact grid metadata from the input NetCDF when available."""
+    """Extract exact grid metadata from the input image when available."""
     metadata = {
         'transform': None,
         'crs': None,
@@ -1156,9 +1137,9 @@ def _normalize_rrs_axes(rrs_arr, dim_names):
         raise ValueError("Cannot determine spatial axes for RRS array.")
     transpose_order = [spectral_axis] + spatial_axes
     ordered = np.transpose(rrs_arr, axes=transpose_order)
-    row_dim_name = dim_names[spatial_axes[0]]
-    col_dim_name = dim_names[spatial_axes[1]]
-    spectral_dim_name = dim_names[spectral_axis]
+    row_dim_name = image_io.stable_dimension_name(dim_names[spatial_axes[0]], 'row')
+    col_dim_name = image_io.stable_dimension_name(dim_names[spatial_axes[1]], 'col')
+    spectral_dim_name = image_io.stable_dimension_name(dim_names[spectral_axis], 'band')
     new_dim_list = (row_dim_name, col_dim_name, spectral_dim_name)
     return ordered, new_dim_list
 
@@ -3613,7 +3594,8 @@ if __name__ == "__main__":
                 print('current var_band_name: ', var_band_name)
                 if var_band_name == lat_name or var_band_name == lon_name:
                     continue
-                var_temp = source_product.variables[var_band_name][:]
+                variable = source_product.variables[var_band_name]
+                var_temp = variable[:]
                 upper_name = var_band_name[:3].upper()
                 if upper_name != 'LAT' and upper_name != 'LON':
                     if var_temp.ndim == 1:
@@ -3624,7 +3606,7 @@ if __name__ == "__main__":
                     elif var_temp.ndim == 3:
                         raw_rrs = np.asarray(var_temp)
                         name_rrs = var_band_name
-                        raw_dims = source_product.variables[var_band_name].dimensions
+                        raw_dims = variable.dimensions
                         rrs, ordered_dims = _normalize_rrs_axes(raw_rrs, raw_dims)
                         nbands = rrs.shape[0]
                         height = rrs.shape[1]
@@ -3635,8 +3617,8 @@ if __name__ == "__main__":
                         continue
                     elif var_temp.ndim == 2 and _is_rrs_band_variable(var_band_name):
                         band_arr = np.asarray(var_temp)
-                        layer_dims = source_product.variables[var_band_name].dimensions
-                        wave = _extract_wavelength(var_band_name)
+                        layer_dims = variable.dimensions
+                        wave = _extract_wavelength(var_band_name, variable)
                         single_band_layers.append({
                             'name': var_band_name,
                             'data': band_arr,
@@ -3645,7 +3627,7 @@ if __name__ == "__main__":
                         })
                         if single_band_dims is None:
                             single_band_dims = layer_dims
-                        elif layer_dims[:2] != single_band_dims[:2]:
+                        elif layer_dims[:2] != single_band_dims[:2] and band_arr.shape != single_band_layers[0]['data'].shape:
                             print(f"[WARN]: RRS band '{var_band_name}' dims {layer_dims} differ from expected {single_band_dims}.")
                         continue
                     elif var_temp.ndim == 2 and _is_auxiliary_scene_variable(var_band_name):
@@ -3665,8 +3647,14 @@ if __name__ == "__main__":
                 nbands = rrs.shape[0]
                 height = rrs.shape[1]
                 width = rrs.shape[2]
-                row_dim = single_band_layers[0]['dims'][0] if single_band_layers[0]['dims'] else 'row'
-                col_dim = single_band_layers[0]['dims'][1] if single_band_layers[0]['dims'] and len(single_band_layers[0]['dims']) > 1 else 'col'
+                row_dim = image_io.stable_dimension_name(
+                    single_band_layers[0]['dims'][0] if single_band_layers[0]['dims'] else None,
+                    'row',
+                )
+                col_dim = image_io.stable_dimension_name(
+                    single_band_layers[0]['dims'][1] if single_band_layers[0]['dims'] and len(single_band_layers[0]['dims']) > 1 else None,
+                    'col',
+                )
                 dim_list = (row_dim, col_dim, 'band')
                 name_rrs = 'stacked_rrs'
                 rrs_band_wavelengths = [layer['wavelength'] for layer in single_band_layers]
@@ -3707,7 +3695,7 @@ if __name__ == "__main__":
                     shape_geo = len(np.asarray(lon_array).shape)
 
             if rrs is None:
-                raise RuntimeError("Unable to locate any valid RRS data in the input NetCDF.")
+                raise RuntimeError("Unable to locate any valid RRS data in the input image.")
 
             rotated_input_mode = bool(name_rrs and not single_band_layers)
             if rotated_input_mode:

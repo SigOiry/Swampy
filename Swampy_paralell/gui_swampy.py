@@ -33,6 +33,11 @@ try:
 except ImportError:  # pragma: no cover - fallback when imported as a package
     from Swampy_paralell import sensor_config
 
+try:
+    import image_io
+except ImportError:  # pragma: no cover - fallback when imported as a package
+    from Swampy_paralell import image_io
+
 
 PLOT_COLORS = [
     "#0f6cbd",
@@ -41,7 +46,7 @@ PLOT_COLORS = [
     "#6c757d",
 ]
 
-_SENTINEL_RGB_PREVIEW_MAX_PIXELS = 6_000_000
+_SENTINEL_RGB_PREVIEW_MAX_PIXELS = 8_000_000
 
 
 def _xml_find_text(node, path, default=None):
@@ -186,46 +191,23 @@ def _display_input_selection(files):
 
 
 def _looks_like_wavelength_var(var_name):
-    lowered = str(var_name).lower()
-    return any(token in lowered for token in ('wave', 'wl', 'lambda', 'wavelength'))
+    return image_io.looks_like_wavelength_var(var_name)
 
 
-def _extract_wavelength(var_name):
-    match = re.search(r'(\d+(?:\.\d+)?)', str(var_name))
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return None
-    return None
+def _extract_wavelength(var_name, variable=None):
+    return image_io.extract_wavelength(var_name, variable)
 
 
 def _band_sort_key(var_name):
-    value = _extract_wavelength(var_name)
-    if value is not None:
-        return value
-    return str(var_name).lower()
+    return image_io.band_sort_key(var_name)
 
 
 def _is_rrs_band_variable(var_name):
-    lowered = str(var_name).lower()
-    return lowered.startswith(('rrs', 'rho', 'reflectance', 'band'))
+    return image_io.is_rrs_band_variable(var_name)
 
 
 def _is_auxiliary_scene_variable(var_name):
-    lowered = str(var_name).lower()
-    tokens = (
-        'flag',
-        'mask',
-        'quality',
-        'class',
-        'cloud',
-        'glint',
-        'angle',
-        'uncert',
-        'bit',
-    )
-    return any(token in lowered for token in tokens)
+    return image_io.is_auxiliary_scene_variable(var_name)
 
 
 def _format_band_wavelength(wavelength):
@@ -322,8 +304,9 @@ def _load_input_image_band_info(path):
             if len(shape) == 3 and all(int(size) > 0 for size in shape):
                 three_d_candidates.append((str(var_name), variable))
             elif len(shape) == 2 and _is_rrs_band_variable(var_name) and not _is_auxiliary_scene_variable(var_name):
-                wave = _extract_wavelength(var_name)
-                two_d_candidates.append((_band_sort_key(var_name), str(var_name), variable, wave))
+                wave = _extract_wavelength(var_name, variable)
+                sort_key = wave if wave is not None else _band_sort_key(var_name)
+                two_d_candidates.append((sort_key, str(var_name), variable, wave))
 
         if three_d_candidates:
             last_valid_result = None
@@ -726,8 +709,9 @@ def _load_preview_band_from_netcdf(path, sensor_name=None, prefer_rgb_preview=Tr
             if len(shape) == 3 and all(int(size) > 0 for size in shape):
                 three_d_candidates.append((str(var_name), variable))
             elif len(shape) == 2 and _is_rrs_band_variable(var_name) and not _is_auxiliary_scene_variable(var_name):
-                wave = _extract_wavelength(var_name)
-                two_d_candidates.append((_band_sort_key(var_name), str(var_name), variable, wave))
+                wave = _extract_wavelength(var_name, variable)
+                sort_key = wave if wave is not None else _band_sort_key(var_name)
+                two_d_candidates.append((sort_key, str(var_name), variable, wave))
 
         if three_d_candidates:
             for var_name, variable in three_d_candidates:
@@ -1274,8 +1258,13 @@ def gui():
     def select_file_im():
         files = askopenfilenames(
             parent=root,
-            title="Choose one or more input images (.nc)",
-            filetypes=[("NetCDF files", "*.nc"), ("All files", "*.*")],
+            title="Choose one or more input images (.nc/.hdf)",
+            filetypes=[
+                ("NetCDF/HDF files", "*.nc *.hdf *.h5"),
+                ("NetCDF files", "*.nc"),
+                ("HDF files", "*.hdf *.h5"),
+                ("All files", "*.*"),
+            ],
         )
         nonlocal input_files
         if files:
@@ -1729,7 +1718,7 @@ def gui():
         lat_grid = preview_info.get("lat_grid")
         lon_grid = preview_info.get("lon_grid")
         if lat_grid is None or lon_grid is None:
-            raise RuntimeError("The crop tool requires latitude and longitude coordinates in the input NetCDF.")
+            raise RuntimeError("The crop tool requires latitude and longitude coordinates in the input image.")
 
         finite_coord_mask = np.isfinite(lat_grid) & np.isfinite(lon_grid)
         if not np.any(finite_coord_mask):
@@ -1781,7 +1770,7 @@ def gui():
         lat_grid = preview_info.get("lat_grid")
         lon_grid = preview_info.get("lon_grid")
         if lat_grid is None or lon_grid is None:
-            raise RuntimeError("The deep-water selector requires latitude and longitude coordinates in the input NetCDF.")
+            raise RuntimeError("The deep-water selector requires latitude and longitude coordinates in the input image.")
 
         finite_coord_mask = np.isfinite(lat_grid) & np.isfinite(lon_grid)
         if not np.any(finite_coord_mask):
@@ -1918,7 +1907,7 @@ def gui():
     def _get_form_validation_error():
         current_files = _current_input_file_list()
         if not current_files:
-            return "Please select at least one input image (.nc)."
+            return "Please select at least one input image (.nc/.hdf)."
         for path in current_files:
             if not os.path.isfile(path):
                 return f"Input image not found: {path}"
@@ -3878,7 +3867,7 @@ def gui():
     for i in range(3):
         files_frame.columnconfigure(i, weight=1)
 
-    ttk.Label(files_frame, text="Input image(s) (.nc)").grid(row=0, column=0, sticky="w")
+    ttk.Label(files_frame, text="Input image(s) (.nc/.hdf)").grid(row=0, column=0, sticky="w")
     ttk.Entry(files_frame, textvariable=input_image_var).grid(row=0, column=1, sticky="ew", padx=(0, 6))
     input_buttons = ttk.Frame(files_frame)
     input_buttons.grid(row=0, column=2, sticky="e")

@@ -2,7 +2,7 @@
 
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](environment.yml) [![GUI](https://img.shields.io/badge/GUI-Tkinter-2E8B57?style=flat-square)](Swampy_paralell/launch_swampy.py) [![Outputs](https://img.shields.io/badge/Outputs-NetCDF%20%7C%20GeoTIFF-D97706?style=flat-square)](README.md) [![Sensors](https://img.shields.io/badge/Sensors-Sentinel--2%20%7C%20PRISMA-6B46C1?style=flat-square)](Data/SRF)
 
-SWAMpy is a GUI-driven shallow-water inversion workflow for retrieving bathymetry, water-column properties, and benthic cover from aquatic reflectance imagery stored in NetCDF format.
+SWAMpy is a GUI-driven shallow-water inversion workflow for retrieving bathymetry, water-column properties, and benthic cover from aquatic reflectance imagery stored in NetCDF or compatible HDF format.
 
 Swampy builds on SAMBUCA, a semi-analytical inversion model designed for the joint retrieval of bathymetry, benthic composition, and water column constituents from remote sensing reflectance data [Bando et al. 2009](https://doi.org/10.1016/j.rse.2008.12.003).
 
@@ -26,7 +26,7 @@ The main folders in this repository are:
 - `Data/SRF/`: bundled sensor templates
 - `Data/spectral_library/`: persistent benthic spectral library used by the GUI
 - `Data/Bathy/`: bundled EMOD bathymetry
-- `Data/Test/`: sample NetCDF scenes and validation data
+- `Data/Test/`: sample NetCDF/HDF scenes and validation data
 - `docs/`: bundled papers and project references
 
 Keep this folder structure unchanged. The GUI expects these relative paths.
@@ -100,7 +100,7 @@ Useful optional command-line overrides:
 ## 🧭 Typical Workflow
 
 1. Launch the GUI.
-2. Select one or more input `.nc` images.
+2. Select one or more input `.nc` or `.hdf` images.
 3. Select an output folder.
 4. Open `Water & Bottom settings` and choose at least two target spectra.
 5. Open `Sensor` and choose the sensor plus the bands to use.
@@ -116,10 +116,11 @@ The `Load settings` button at the bottom of the GUI can restore a previous `log_
 
 ## 🛰️ Input Expectations
 
-The main workflow expects an input image in NetCDF format. In practice:
+The main workflow expects an input image readable through the NetCDF/HDF reader. In practice:
 
 - the file should contain latitude and longitude variables
 - the reflectance bands should be stored as spectral layers that SWAMpy can identify and align to the selected sensor
+- Acolite L2W-style `Rrs_*` variables and Polymer-style `Rw###` variables are detected automatically
 - if the reflectance is above-water remote-sensing reflectance (`Rrs`), enable the `Above RRS` option
 
 Optional inputs:
