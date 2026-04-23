@@ -2,3 +2,12 @@ Output/*
 Data/Test/*
 Data/Bathy/*
 .Rproj.user
+
+# Python bytecode — never commit these
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Numba cache
+*.nbc
+*.nbi

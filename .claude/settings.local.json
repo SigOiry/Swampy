@@ -13,7 +13,11 @@
       "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -c \"import scipy; print\\('scipy', scipy.__version__\\)\")",
       "Bash(/c/Users/Simon/miniconda3/condabin/conda.bat search:*)",
       "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -c \"import numba; import numpy; print\\('numba', numba.__version__, '| numpy', numpy.__version__\\)\")",
-      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -)"
+      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -)",
+      "Bash(powershell -Command \"Rename-Item -Path 'c:\\\\Users\\\\Simon\\\\Nextcloud\\\\GIT\\\\Swampy\\\\Swampy_paralell' -NewName 'app'\")",
+      "Bash(gh --version)",
+      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" remote -v)",
+      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" status)"
     ]
   }
 }
