@@ -2082,6 +2082,18 @@ def gui():
             minsize=(660, 200),
         )
 
+    def open_reflectance_input_popup():
+        open_feature_popup(
+            "Reflectance input (÷π)",
+            "Enable this when the input image contains hemispherical reflectance (ρ) rather than "
+            "remote-sensing reflectance (Rrs). "
+            "The two quantities are related by  Rrs = ρ / π, so when this option is on the workflow "
+            "divides every band by π before any further processing. "
+            "Leave it disabled if the image already contains Rrs values.",
+            geometry="760x240",
+            minsize=(700, 220),
+        )
+
     def open_shallow_water_popup():
         open_feature_popup(
             "Shallow water adjustment",
@@ -2223,7 +2235,7 @@ def gui():
 
     def open_post_processing_popup():
         open_feature_popup(
-            "Post processing",
+            "Output spectral parameters",
             "This computes and exports extra spectral products after the main inversion, including modeled reflectance, deep-water reflectance, spectral kd, substrate reflectance, absorption, and backscattering. "
             "It is useful for diagnostics, but it adds runtime and creates additional output files.",
             geometry="780x230",
@@ -3923,6 +3935,7 @@ def gui():
     ttk.Button(files_frame, text="Configure", command=open_sensor_popup).grid(row=4, column=2, sticky="e")
 
     above_rrs_flag = BooleanVar(value=True)
+    reflectance_input_flag = BooleanVar(value=False)
     shallow_flag = BooleanVar(value=False)
     false_deep_correction_flag = BooleanVar(value=False)
     optimize_initial_guesses_flag = BooleanVar(value=False)
@@ -3962,6 +3975,7 @@ def gui():
     pre_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=2)
     pre_frame.columnconfigure(1, weight=1)
     add_option_row(pre_frame, 0, "Above RRS", above_rrs_flag, open_above_rrs_popup)
+    add_option_row(pre_frame, 1, "Reflectance (dimensionless)", reflectance_input_flag, open_reflectance_input_popup)
 
     # Column 1 — Processing Options
     proc_frame = ttk.Labelframe(flags_frame, text="Processing Options")
@@ -3982,7 +3996,6 @@ def gui():
         false_deep_correction_flag,
         open_false_deep_correction_popup,
     )
-    add_option_row(post_frame, 2, "Export spectral products", pp, open_post_processing_popup)
 
     def update_initial_guess_controls(*_args):
         if not optimize_initial_guesses_flag.get():
@@ -4463,6 +4476,7 @@ def gui():
             io_change_state["modified_since_load"] = False
 
         above_rrs_flag.set(_parse_bool_text(_xml_find_text(xml_root, "rrs_flag"), above_rrs_flag.get()))
+        reflectance_input_flag.set(_parse_bool_text(_xml_find_text(xml_root, "reflectance_input"), reflectance_input_flag.get()))
         shallow_flag.set(_parse_bool_text(_xml_find_text(xml_root, "shallow"), shallow_flag.get()))
         optimize_initial_guesses_flag.set(_parse_bool_text(_xml_find_text(xml_root, "optimize_initial_guesses"), optimize_initial_guesses_flag.get()))
         five_initial_guess_testing_flag.set(_parse_bool_text(_xml_find_text(xml_root, "use_five_initial_guesses"), five_initial_guess_testing_flag.get()))
@@ -4575,6 +4589,7 @@ def gui():
     out_opts_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=2)
     out_opts_frame.columnconfigure(1, weight=1)
     add_option_row(out_opts_frame, 0, "Output modeled reflectance", output_modeled_reflectance_flag, open_modeled_reflectance_popup)
+    add_option_row(out_opts_frame, 1, "Output spectral parameters", pp, open_post_processing_popup)
 
     def validate_and_close():
         nonlocal compiled_siop, compiled_sensor
@@ -4724,6 +4739,7 @@ def gui():
         "pmin": pmin,
         "pmax": pmax,
         "rrs_flag": above_rrs_flag.get(),
+        "reflectance_input": reflectance_input_flag.get(),
         "shallow": shallow_flag.get(),
         "optimize_initial_guesses": optimize_initial_guesses_flag.get(),
         "use_five_initial_guesses": five_initial_guess_testing_flag.get(),
@@ -4790,6 +4806,7 @@ def gui():
         file_iop,
         file_sensor,
         above_rrs_flag.get(),
+        reflectance_input_flag.get(),
         relaxed.get(),
         shallow_flag.get(),
         optimize_initial_guesses_flag.get(),

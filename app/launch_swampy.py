@@ -3412,6 +3412,7 @@ if __name__ == "__main__":
             file_sensor = _resolve_bundled_resource(root['sensor_filter'])  # the file containing the sensor filter
             """the three flags"""
             above_rrs_flag = _coerce_bool(root.get('rrs_flag', True))  # if above or below rrs
+            reflectance_input_flag = _coerce_bool(root.get('reflectance_input', False))  # divide by pi
             relaxed = _coerce_bool(root.get('relaxed', False))  # relaxed constraints for substrates
             shallow_flag = _coerce_bool(root.get('shallow', False))  # if this shallow water
             optimize_initial_guesses = _coerce_bool(root.get('optimize_initial_guesses', False))
@@ -3468,7 +3469,7 @@ if __name__ == "__main__":
             if gui_result is None:
                 print("[INFO]: GUI closed without running. Exiting.")
                 sys.exit(0)
-            file_list, ofile, siop_xml_path, file_sensor, above_rrs_flag, relaxed, shallow_flag, \
+            file_list, ofile, siop_xml_path, file_sensor, above_rrs_flag, reflectance_input_flag, relaxed, shallow_flag, \
                 optimize_initial_guesses, use_five_initial_guesses, initial_guess_debug, fully_relaxed, output_modeled_reflectance, false_deep_correction_settings, pmin, pmax, xml_file, xml_dict, output_format, bathy_path, pp, allow_split, split_chunk_rows_str = gui_result
             split_chunk_rows = _parse_chunk_rows(split_chunk_rows_str)
             bathy_path = _resolve_bundled_resource(bathy_path)
@@ -3837,6 +3838,11 @@ if __name__ == "__main__":
             algo = main_sambuca_snap.main_sambuca()
 
             # initialize the rrs array
+            if reflectance_input_flag:
+                rrs = rrs / np.pi
+                if deep_water_rrs_full is not None:
+                    deep_water_rrs_full = deep_water_rrs_full / np.pi
+
             if above_rrs_flag == True:
                 rrs = (2 * rrs) / ((3 * rrs) + 1)
                 if deep_water_rrs_full is not None:
