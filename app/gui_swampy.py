@@ -3847,20 +3847,19 @@ def gui():
     notebook.grid(row=0, column=0, sticky="nsew")
 
     input_tab = ttk.Frame(notebook, padding=8)
-    bathy_tab = ttk.Frame(notebook, padding=8)
     params_tab = ttk.Frame(notebook, padding=8)
     notebook.add(input_tab, text="Inputs & Options")
-    notebook.add(bathy_tab, text="Bathymetry")
     notebook.add(params_tab, text="Parameters")
 
-    for tab in (input_tab, bathy_tab, params_tab):
+    for tab in (input_tab, params_tab):
         tab.columnconfigure(0, weight=1)
 
     input_tab.rowconfigure(0, weight=0)
     input_tab.rowconfigure(1, weight=1)
     input_tab.rowconfigure(2, weight=0)
-    bathy_tab.rowconfigure(0, weight=1)
-    params_tab.rowconfigure(0, weight=1)
+    params_tab.rowconfigure(0, weight=0)
+    params_tab.rowconfigure(1, weight=0)
+    params_tab.rowconfigure(2, weight=0)
 
     files_frame = ttk.Labelframe(input_tab, text="Files")
     files_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
@@ -3890,11 +3889,6 @@ def gui():
     ttk.Label(files_frame, textvariable=sensor_summary_var, wraplength=560, justify="left").grid(row=4, column=1, sticky="w", padx=(0, 6))
     ttk.Button(files_frame, text="Configure", command=open_sensor_popup).grid(row=4, column=2, sticky="e")
 
-    flags_frame = ttk.Labelframe(input_tab, text="Options")
-    flags_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
-    flags_frame.columnconfigure(0, weight=0)
-    flags_frame.columnconfigure(1, weight=1)
-
     above_rrs_flag = BooleanVar(value=True)
     shallow_flag = BooleanVar(value=False)
     false_deep_correction_flag = BooleanVar(value=False)
@@ -3908,6 +3902,7 @@ def gui():
     allow_split = BooleanVar(value=False)
     chunk_rows = StringVar(value="512")
     bathy_mode = tk.StringVar(value="estimate")
+    bathy_source = tk.StringVar(value="estimate")   # "estimate" | "emodnet" | "user"
     bathy_path_var = tk.StringVar(value="")
     bathy_info_var = tk.StringVar(value="")
     bathy_correction = tk.StringVar(value="0")
@@ -3915,37 +3910,46 @@ def gui():
     use_emodnet_var = BooleanVar(value=False)
     user_defined_var = BooleanVar(value=False)
 
-    def add_option_row(row_index, label, variable, popup_command, pady=(0, 2)):
-        info_button = ttk.Button(flags_frame, text="Info", width=6, command=popup_command)
-        info_button.grid(
-            row=row_index,
-            column=0,
-            sticky="w",
-            padx=(0, 8),
-            pady=pady,
-        )
-        checkbutton = ttk.Checkbutton(flags_frame, text=label, variable=variable)
-        checkbutton.grid(
-            row=row_index,
-            column=1,
-            sticky=W,
-            pady=pady,
-        )
+    def add_option_row(parent, row_index, label, variable, popup_command, pady=(0, 2)):
+        info_button = ttk.Button(parent, text="Info", width=6, command=popup_command)
+        info_button.grid(row=row_index, column=0, sticky="w", padx=(0, 8), pady=pady)
+        checkbutton = ttk.Checkbutton(parent, text=label, variable=variable)
+        checkbutton.grid(row=row_index, column=1, sticky=W, pady=pady)
         return info_button, checkbutton
 
-    add_option_row(0, "Above RRS", above_rrs_flag, open_above_rrs_popup)
-    add_option_row(1, "Shallow water", shallow_flag, open_shallow_water_popup)
+    # ---- Options section: 3 columns ----
+    flags_frame = ttk.Labelframe(input_tab, text="Options")
+    flags_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
+    flags_frame.columnconfigure(0, weight=1)
+    flags_frame.columnconfigure(1, weight=1)
+    flags_frame.columnconfigure(2, weight=1)
+
+    # Column 0 — Pre-processing
+    pre_frame = ttk.Labelframe(flags_frame, text="Pre-processing")
+    pre_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=2)
+    pre_frame.columnconfigure(1, weight=1)
+    add_option_row(pre_frame, 0, "Above RRS", above_rrs_flag, open_above_rrs_popup)
+
+    # Column 1 — Processing Options
+    proc_frame = ttk.Labelframe(flags_frame, text="Processing Options")
+    proc_frame.grid(row=0, column=1, sticky="nsew", padx=4, pady=2)
+    proc_frame.columnconfigure(1, weight=1)
+    add_option_row(proc_frame, 0, "Optimise initial guesses", optimize_initial_guesses_flag, open_initial_guess_popup)
+    add_option_row(proc_frame, 1, "Relaxed constraints", relaxed, open_relaxed_constraints_popup)
+    add_option_row(proc_frame, 2, "Allow image splitting", allow_split, open_split_popup)
+
+    # Column 2 — Post-processing
+    post_frame = ttk.Labelframe(flags_frame, text="Post-processing")
+    post_frame.grid(row=0, column=2, sticky="nsew", padx=(4, 0), pady=2)
+    post_frame.columnconfigure(1, weight=1)
+    add_option_row(post_frame, 0, "Shallow waters", shallow_flag, open_shallow_water_popup)
     false_deep_info_button, false_deep_checkbutton = add_option_row(
-        2,
+        post_frame, 1,
         "Correct steep false-deep bathymetry",
         false_deep_correction_flag,
         open_false_deep_correction_popup,
     )
-    add_option_row(3, "Optimise initial guesses", optimize_initial_guesses_flag, open_initial_guess_popup)
-    add_option_row(4, "Output modeled reflectance", output_modeled_reflectance_flag, open_modeled_reflectance_popup)
-    add_option_row(5, "Relaxed constraints", relaxed, open_relaxed_constraints_popup)
-    add_option_row(6, "Post processing", pp, open_post_processing_popup)
-    add_option_row(7, "Allow image splitting", allow_split, open_split_popup, pady=(4, 0))
+    add_option_row(post_frame, 2, "Export spectral products", pp, open_post_processing_popup)
 
     def update_initial_guess_controls(*_args):
         if not optimize_initial_guesses_flag.get():
@@ -3974,66 +3978,90 @@ def gui():
     update_relaxed_controls()
     update_false_deep_correction_controls()
 
-    bathy_frame = ttk.Labelframe(bathy_tab, text="Bathymetry")
-    bathy_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-    bathy_frame.columnconfigure(0, weight=1)
-    ttk.Radiobutton(bathy_frame, text="Estimate bathymetry", value="estimate", variable=bathy_mode).grid(row=0, column=0, sticky=W)
-    ttk.Radiobutton(bathy_frame, text="Use input bathymetry", value="input", variable=bathy_mode).grid(row=1, column=0, sticky=W)
+    # ---- Input Bathymetry section (params_tab row 2) ----
+    bathy_frame = ttk.Labelframe(params_tab, text="Input Bathymetry")
+    bathy_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
+    bathy_frame.columnconfigure(1, weight=1)
 
-    bathy_input_frame = ttk.Frame(bathy_frame)
-    bathy_input_frame.grid(row=2, column=0, sticky="nsew", padx=(12, 0), pady=(6, 0))
-    bathy_input_frame.columnconfigure(1, weight=1)
+    # Row 0: Estimate (default)
+    ttk.Radiobutton(
+        bathy_frame, text="Estimate from image (inverse model)",
+        value="estimate", variable=bathy_source,
+    ).grid(row=0, column=0, columnspan=3, sticky=W, pady=(2, 0))
 
-    def on_emodnet_toggle():
-        if use_emodnet_var.get():
-            if user_defined_var.get():
-                user_defined_var.set(False)
-            path = _resolve_bundled_resource(cwd, os.path.join(cwd, "Data", "Bathy", "E4_2024.tif"))
+    # Row 1: EMODnet
+    ttk.Radiobutton(
+        bathy_frame, text="EMODnet (bundled 2024 mosaic)",
+        value="emodnet", variable=bathy_source,
+    ).grid(row=1, column=0, columnspan=3, sticky=W)
+
+    # Row 2: User defined  [Browse]  [filename]
+    ttk.Radiobutton(
+        bathy_frame, text="User defined",
+        value="user", variable=bathy_source,
+    ).grid(row=2, column=0, sticky=W)
+    bathy_browse_btn = ttk.Button(
+        bathy_frame, text="Browse…", width=9,
+        command=lambda: _on_bathy_browse(),
+    )
+    bathy_browse_btn.grid(row=2, column=1, sticky="w", padx=(8, 0))
+    ttk.Label(bathy_frame, textvariable=bathy_info_var, foreground="gray").grid(
+        row=2, column=2, sticky="w", padx=(8, 0),
+    )
+
+    # Rows 3-4: correction / tolerance — visible only when a reference file is used
+    bathy_detail_frame = ttk.Frame(bathy_frame)
+    bathy_detail_frame.grid(row=3, column=0, columnspan=3, sticky="ew", padx=(16, 0), pady=(6, 2))
+    bathy_detail_frame.columnconfigure(1, weight=0)
+
+    ttk.Label(bathy_detail_frame, text="Water level correction (m)").grid(row=0, column=0, sticky=W)
+    ttk.Entry(bathy_detail_frame, textvariable=bathy_correction, width=10).grid(row=0, column=1, sticky="w", padx=(8, 0))
+    ttk.Label(bathy_detail_frame, text="Depth bounds around bathy (\u00b1 m)").grid(row=1, column=0, sticky=W, pady=(4, 0))
+    ttk.Entry(bathy_detail_frame, textvariable=bathy_tolerance, width=10).grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
+
+    def _on_bathy_browse():
+        path = askopenfilename(
+            parent=root,
+            title="Choose bathymetry GeoTIFF",
+            filetypes=[("GeoTIFF", "*.tif *.tiff"), ("All files", "*.*")],
+        )
+        if path:
             bathy_path_var.set(path)
+            bathy_info_var.set(os.path.basename(path))
+            bathy_source.set("user")
+        elif bathy_source.get() == "user":
+            bathy_source.set("estimate")
+
+    def _sync_bathy_source(*_args):
+        src = bathy_source.get()
+        if src == "estimate":
+            bathy_mode.set("estimate")
+            use_emodnet_var.set(False)
+            user_defined_var.set(False)
+            bathy_path_var.set("")
+            bathy_info_var.set("")
+            bathy_detail_frame.grid_remove()
+            bathy_browse_btn.state(["disabled"])
+        elif src == "emodnet":
+            bathy_mode.set("input")
+            use_emodnet_var.set(True)
+            user_defined_var.set(False)
+            emodnet_path = _resolve_bundled_resource(cwd, os.path.join(cwd, "Data", "Bathy", "E4_2024.tif"))
+            bathy_path_var.set(emodnet_path)
             bathy_info_var.set("EMODnet: E4_2024.tif")
-        elif not user_defined_var.get():
-            bathy_path_var.set("")
-            bathy_info_var.set("")
+            bathy_detail_frame.grid()
+            bathy_browse_btn.state(["disabled"])
+        else:  # "user"
+            bathy_mode.set("input")
+            use_emodnet_var.set(False)
+            user_defined_var.set(True)
+            bathy_detail_frame.grid()
+            bathy_browse_btn.state(["!disabled"])
+            if not bathy_path_var.get():
+                _on_bathy_browse()
 
-    def on_user_defined_toggle():
-        if user_defined_var.get():
-            if use_emodnet_var.get():
-                use_emodnet_var.set(False)
-            path = askopenfilename(
-                parent=root,
-                title="Choose bathymetry GeoTIFF",
-                filetypes=[("GeoTIFF", "*.tif *.tiff"), ("All files", "*.*")],
-            )
-            if path:
-                bathy_path_var.set(path)
-                bathy_info_var.set(os.path.basename(path))
-            else:
-                user_defined_var.set(False)
-                if not use_emodnet_var.get():
-                    bathy_path_var.set("")
-                    bathy_info_var.set("")
-        elif not use_emodnet_var.get():
-            bathy_path_var.set("")
-            bathy_info_var.set("")
-
-    ttk.Checkbutton(bathy_input_frame, text="EMODnet", variable=use_emodnet_var, command=on_emodnet_toggle).grid(row=0, column=0, sticky=W)
-    ttk.Checkbutton(bathy_input_frame, text="User defined", variable=user_defined_var, command=on_user_defined_toggle).grid(row=0, column=1, sticky=W, padx=(12, 0))
-    ttk.Label(bathy_input_frame, textvariable=bathy_info_var).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
-
-    ttk.Label(bathy_input_frame, text="Water level correction (m)").grid(row=2, column=0, sticky=W, pady=(6, 0))
-    ttk.Entry(bathy_input_frame, textvariable=bathy_correction, width=10).grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
-
-    ttk.Label(bathy_input_frame, text="Depth bounds around bathy (\u00b1 m)").grid(row=3, column=0, sticky=W, pady=(6, 0))
-    ttk.Entry(bathy_input_frame, textvariable=bathy_tolerance, width=10).grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
-
-    def update_bathy_visibility(*_args):
-        if bathy_mode.get() == "input":
-            bathy_input_frame.grid()
-        else:
-            bathy_input_frame.grid_remove()
-
-    bathy_mode.trace_add("write", update_bathy_visibility)
-    update_bathy_visibility()
+    bathy_source.trace_add("write", _sync_bathy_source)
+    _sync_bathy_source()  # apply initial state
 
     params_frame = ttk.Labelframe(params_tab, text="Parameter Bounds (min / max)")
     params_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
@@ -4465,8 +4493,10 @@ def gui():
             user_defined_var.set(not is_emodnet and bool(loaded_bathy_path))
             if is_emodnet:
                 bathy_info_var.set("EMODnet: E4_2024.tif")
+                bathy_source.set("emodnet")
             else:
                 bathy_info_var.set(os.path.basename(loaded_bathy_path) if loaded_bathy_path else "")
+                bathy_source.set("user")
         else:
             bathy_mode.set("estimate")
             bathy_path_var.set("")
@@ -4475,6 +4505,7 @@ def gui():
             bathy_tolerance.set("0")
             use_emodnet_var.set(False)
             user_defined_var.set(False)
+            bathy_source.set("estimate")
 
         update_substrate_ui()
         update_sensor_ui()
@@ -4491,14 +4522,26 @@ def gui():
                 parent=root,
             )
 
-    fmt_frame = ttk.Labelframe(input_tab, text="Output Format")
-    fmt_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
-    fmt_frame.columnconfigure(0, weight=1)
+    # ---- Output section: 2 columns ----
+    output_section_frame = ttk.Labelframe(input_tab, text="Output")
+    output_section_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
+    output_section_frame.columnconfigure(0, weight=1)
+    output_section_frame.columnconfigure(1, weight=1)
 
+    # Column 0 — Format
+    fmt_frame = ttk.Labelframe(output_section_frame, text="Format")
+    fmt_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=2)
+    fmt_frame.columnconfigure(0, weight=1)
     output_format = tk.StringVar(value="both")
     ttk.Radiobutton(fmt_frame, text="NetCDF", value="netcdf", variable=output_format).grid(row=0, column=0, sticky=W)
     ttk.Radiobutton(fmt_frame, text="GeoTIFF", value="geotiff", variable=output_format).grid(row=1, column=0, sticky=W)
     ttk.Radiobutton(fmt_frame, text="Both", value="both", variable=output_format).grid(row=2, column=0, sticky=W)
+
+    # Column 1 — Options
+    out_opts_frame = ttk.Labelframe(output_section_frame, text="Options")
+    out_opts_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=2)
+    out_opts_frame.columnconfigure(1, weight=1)
+    add_option_row(out_opts_frame, 0, "Output modeled reflectance", output_modeled_reflectance_flag, open_modeled_reflectance_popup)
 
     def validate_and_close():
         nonlocal compiled_siop, compiled_sensor
