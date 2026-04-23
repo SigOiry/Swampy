@@ -17,7 +17,13 @@
       "Bash(powershell -Command \"Rename-Item -Path 'c:\\\\Users\\\\Simon\\\\Nextcloud\\\\GIT\\\\Swampy\\\\Swampy_paralell' -NewName 'app'\")",
       "Bash(gh --version)",
       "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" remote -v)",
-      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" status)"
+      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" status)",
+      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" log --oneline)",
+      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" show --stat 648d5f3 0219a02 5cf8417 3133999 4fe46b8 4283f23 f76159e 744364e 9ebdc31 8cfcd74)",
+      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" log --format=\"%H %s\")",
+      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" diff b085a0e HEAD -- app/gui_swampy.py app/launch_swampy.py app/image_io.py app/leaflet_crop_window.py)",
+      "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" log --format=\"%s%n%b\" b085a0e..HEAD)",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }
