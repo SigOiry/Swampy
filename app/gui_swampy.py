@@ -5,6 +5,7 @@ Created on Tue Jun 18 15:14:44 2019
 @author: marco
 """
 
+import ctypes
 import datetime
 import json
 import os
@@ -1126,11 +1127,44 @@ def gui():
             return None
         return int(match.group(1)), int(match.group(2))
 
+    def _get_screen_info(window):
+        """
+        Return (left, top, width, height) of the work area for the monitor that
+        currently contains *window*.  On Windows this uses ctypes to query the
+        real monitor geometry so multi-monitor setups with different resolutions
+        are handled correctly.  Falls back to winfo_screen* on other platforms.
+        """
+        if sys.platform.startswith("win"):
+            try:
+                window.update_idletasks()
+
+                class _RECT(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                                 ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+                class _MONITORINFO(ctypes.Structure):
+                    _fields_ = [("cbSize", ctypes.c_ulong),
+                                 ("rcMonitor", _RECT),
+                                 ("rcWork", _RECT),
+                                 ("dwFlags", ctypes.c_ulong)]
+
+                MONITOR_DEFAULTTONEAREST = 0x00000002
+                hwnd = window.winfo_id()
+                hmon = ctypes.windll.user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+                mi = _MONITORINFO()
+                mi.cbSize = ctypes.sizeof(_MONITORINFO)
+                ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi))
+                w = mi.rcWork.right - mi.rcWork.left
+                h = mi.rcWork.bottom - mi.rcWork.top
+                return mi.rcWork.left, mi.rcWork.top, w, h
+            except Exception:
+                pass
+        return 0, 0, window.winfo_screenwidth(), window.winfo_screenheight()
+
     def apply_window_size(window, preferred_size=None, minsize=(700, 240),
                           width_ratio=None, height_ratio=None,
                           max_width_ratio=0.96, max_height_ratio=0.92):
-        screen_width = window.winfo_screenwidth()
-        screen_height = window.winfo_screenheight()
+        _, _, screen_width, screen_height = _get_screen_info(window)
         preferred_width = preferred_size[0] if preferred_size else None
         preferred_height = preferred_size[1] if preferred_size else None
 
@@ -1158,8 +1192,7 @@ def gui():
 
     def center_window(window, max_width_ratio=0.96, max_height_ratio=0.92):
         window.update_idletasks()
-        screen_width = window.winfo_screenwidth()
-        screen_height = window.winfo_screenheight()
+        scr_left, scr_top, screen_width, screen_height = _get_screen_info(window)
         max_width = max(640, int(screen_width * max_width_ratio))
         max_height = max(420, int(screen_height * max_height_ratio))
         width = min(window.winfo_width(), max_width)
@@ -1168,8 +1201,8 @@ def gui():
         window.update_idletasks()
         width = window.winfo_width()
         height = window.winfo_height()
-        x_pos = int((screen_width - width) / 2)
-        y_pos = int((screen_height - height) / 3)
+        x_pos = scr_left + int((screen_width - width) / 2)
+        y_pos = scr_top + int((screen_height - height) / 3)
         window.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
 
     apply_window_size(
@@ -4579,6 +4612,45 @@ def gui():
     update_crop_button_state()
     update_run_button_state()
     root.protocol("WM_DELETE_WINDOW", on_close)
+
+    # ---- React when the window is dragged to a different monitor ----
+    _last_monitor_rect = [None]
+    _monitor_check_id = [None]
+
+    def _clamp_to_current_monitor():
+        """
+        Shrink and/or reposition the window so it fits inside the work area of
+        whichever monitor it currently occupies.  Only acts when the monitor
+        has actually changed since the last check, so routine resizes inside
+        the same monitor are ignored.
+        """
+        scr_left, scr_top, scr_w, scr_h = _get_screen_info(root)
+        cur_rect = (scr_left, scr_top, scr_w, scr_h)
+        if cur_rect == _last_monitor_rect[0]:
+            return
+        _last_monitor_rect[0] = cur_rect
+
+        max_w = max(960, int(scr_w * 0.94))
+        max_h = max(600, int(scr_h * 0.90))
+        new_w = min(root.winfo_width(), max_w)
+        new_h = min(root.winfo_height(), max_h)
+
+        # Clamp position so the window stays fully inside the work area
+        wx = max(scr_left, min(root.winfo_x(), scr_left + scr_w - new_w))
+        wy = max(scr_top,  min(root.winfo_y(), scr_top  + scr_h - new_h))
+
+        root.geometry(f"{new_w}x{new_h}+{wx}+{wy}")
+        root.minsize(min(960, new_w), min(600, new_h))
+
+    def _on_root_configure(event):
+        if event.widget is not root:
+            return
+        if _monitor_check_id[0]:
+            root.after_cancel(_monitor_check_id[0])
+        _monitor_check_id[0] = root.after(300, _clamp_to_current_monitor)
+
+    root.bind("<Configure>", _on_root_configure)
+
     center_window(root)
     root.mainloop()
 
