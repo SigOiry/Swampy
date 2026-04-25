@@ -57,22 +57,6 @@ If the environment already exists and you want to refresh it:
 conda env update -f environment.yml --prune
 conda activate SwampySim
 ```
-
-The environment includes the main numerical and geospatial dependencies used by the workflow:
-
-- Python 3.11
-- NumPy
-- SciPy
-- pandas
-- netCDF4
-- rasterio
-- spectral
-- xmltodict
-- dicttoxml
-- tqdm
-- numba
-- tkinter
-
 ## ▶️ How To Launch The App
 
 From the repository root:
