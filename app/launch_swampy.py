@@ -1465,6 +1465,139 @@ def _normalise_false_deep_correction_settings(raw_settings):
     return settings
 
 
+def _false_deep_float_values(data):
+    return np.asarray(ma.array(data, copy=False).filled(np.nan), dtype=float)
+
+
+def _false_deep_base_masks(depth_data, sdi_data, error_f_data, slope_data,
+                           settings, depth_min, exposed_mask=None, required_data=()):
+    depth_values = _false_deep_float_values(depth_data)
+    sdi_values = _false_deep_float_values(sdi_data)
+    error_values = _false_deep_float_values(error_f_data)
+    slope_values = _false_deep_float_values(slope_data)
+
+    valid_water = (
+        np.isfinite(depth_values)
+        & np.isfinite(sdi_values)
+        & np.isfinite(error_values)
+        & np.isfinite(slope_values)
+    )
+    for required in required_data or ():
+        valid_water &= np.isfinite(_false_deep_float_values(required))
+
+    barrier_mask = np.zeros(depth_values.shape, dtype=bool)
+    if exposed_mask is not None:
+        barrier_mask |= np.asarray(exposed_mask, dtype=bool)
+    if settings['treat_min_depth_as_barrier']:
+        barrier_mask |= (
+            valid_water
+            & (depth_values <= (float(depth_min) + settings['barrier_depth_margin_m']))
+            & (sdi_values >= settings['barrier_min_sdi'])
+        )
+
+    return depth_values, sdi_values, error_values, slope_values, valid_water & ~barrier_mask, barrier_mask
+
+
+def _build_false_deep_confident_mask(depth_data, sdi_data, error_f_data, slope_data,
+                                     settings, depth_min, exposed_mask=None,
+                                     required_data=()):
+    depth_values, sdi_values, error_values, slope_values, water_mask, _ = _false_deep_base_masks(
+        depth_data,
+        sdi_data,
+        error_f_data,
+        slope_data,
+        settings,
+        depth_min,
+        exposed_mask=exposed_mask,
+        required_data=required_data,
+    )
+    return (
+        water_mask
+        & (sdi_values >= settings['anchor_min_sdi'])
+        & (depth_values <= settings['anchor_max_depth_m'])
+        & (depth_values >= (float(depth_min) + settings['anchor_min_depth_margin_m']))
+        & (slope_values <= settings['anchor_max_slope_percent'])
+        & (error_values <= settings['anchor_max_error_f'])
+    )
+
+
+def _finite_percentile(values, percentile):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    return float(np.nanpercentile(values, percentile))
+
+
+def _derive_scene_adaptive_false_deep_settings(depth_data, sdi_data, error_f_data,
+                                               slope_data, settings, depth_min,
+                                               exposed_mask=None, required_data=()):
+    """Relax false-deep anchor thresholds from first-pass scene statistics."""
+    effective = dict(settings)
+    depth_values, sdi_values, error_values, slope_values, water_mask, _ = _false_deep_base_masks(
+        depth_data,
+        sdi_data,
+        error_f_data,
+        slope_data,
+        effective,
+        depth_min,
+        exposed_mask=exposed_mask,
+        required_data=required_data,
+    )
+    if not np.any(water_mask):
+        return effective
+
+    shallow_low_slope_mask = (
+        water_mask
+        & (depth_values <= effective['anchor_max_depth_m'])
+        & (depth_values >= (float(depth_min) + effective['anchor_min_depth_margin_m']))
+        & (slope_values <= effective['anchor_max_slope_percent'])
+    )
+    if int(np.count_nonzero(shallow_low_slope_mask)) < int(effective['min_anchor_count']):
+        shallow_low_slope_mask = water_mask
+
+    configured_sdi = float(effective['anchor_min_sdi'])
+    scene_sdi = _finite_percentile(sdi_values[shallow_low_slope_mask], 60.0)
+    if np.isfinite(scene_sdi):
+        sdi_floor = max(0.25, min(configured_sdi, float(effective['suspect_max_sdi']) * 0.75))
+        effective['anchor_min_sdi'] = min(configured_sdi, max(sdi_floor, scene_sdi))
+
+    configured_error = float(effective['anchor_max_error_f'])
+    scene_error = _finite_percentile(error_values[shallow_low_slope_mask], 70.0)
+    if np.isfinite(scene_error):
+        error_cap = max(configured_error, min(0.02, max(configured_error * 4.0, configured_error + 0.001)))
+        effective['anchor_max_error_f'] = min(max(configured_error, scene_error), error_cap)
+
+    base_radius = int(effective['search_radius_px'])
+    anchor_mask = _build_false_deep_confident_mask(
+        depth_data,
+        sdi_data,
+        error_f_data,
+        slope_data,
+        effective,
+        depth_min,
+        exposed_mask=exposed_mask,
+        required_data=required_data,
+    )
+    water_count = int(np.count_nonzero(water_mask))
+    anchor_count = int(np.count_nonzero(anchor_mask))
+    anchor_density = (anchor_count / water_count) if water_count else 0.0
+    radius_multiplier = 1.0
+    if anchor_count < int(effective['min_anchor_count']):
+        radius_multiplier = 3.0
+    elif anchor_density < 0.01:
+        radius_multiplier = 3.0
+    elif anchor_density < 0.03:
+        radius_multiplier = 2.0
+    elif anchor_density < 0.06:
+        radius_multiplier = 1.5
+
+    scene_diag = float(np.hypot(*water_mask.shape))
+    scene_radius_cap = max(base_radius, min(96, int(np.ceil(0.10 * scene_diag))))
+    effective['search_radius_px'] = min(scene_radius_cap, max(base_radius, int(np.ceil(base_radius * radius_multiplier))))
+    return effective
+
+
 def _weighted_median(values, weights):
     values = np.asarray(values, dtype=float)
     weights = np.asarray(weights, dtype=float)
@@ -1809,6 +1942,7 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
                                       settings, depth_min, p_bounds,
                                       exposed_mask=None, dx_m=np.nan, dy_m=np.nan,
                                       extra_confident_mask=None,
+                                      base_confident_mask=None,
                                       lock_water_parameters=False):
     depth = ma.array(depth_data, copy=False)
     sdi = ma.array(sdi_data, copy=False)
@@ -1822,10 +1956,16 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
     sub2 = ma.array(sub2_data, copy=False)
     sub3 = ma.array(sub3_data, copy=False)
 
-    depth_values = depth.filled(np.nan).astype(float)
-    sdi_values = sdi.filled(np.nan).astype(float)
-    error_values = error_f.filled(np.nan).astype(float)
-    slope_values = slope.filled(np.nan).astype(float)
+    depth_values, sdi_values, error_values, slope_values, water_mask, barrier_mask = _false_deep_base_masks(
+        depth,
+        sdi,
+        error_f,
+        slope,
+        settings,
+        depth_min,
+        exposed_mask=exposed_mask,
+        required_data=(chl, cdom, nap, kd),
+    )
     chl_values = chl.filled(np.nan).astype(float)
     cdom_values = cdom.filled(np.nan).astype(float)
     nap_values = nap.filled(np.nan).astype(float)
@@ -1833,29 +1973,6 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
     sub1_values = sub1.filled(np.nan).astype(float)
     sub2_values = sub2.filled(np.nan).astype(float)
     sub3_values = sub3.filled(np.nan).astype(float)
-
-    valid_water = (
-        np.isfinite(depth_values)
-        & np.isfinite(sdi_values)
-        & np.isfinite(error_values)
-        & np.isfinite(slope_values)
-        & np.isfinite(chl_values)
-        & np.isfinite(cdom_values)
-        & np.isfinite(nap_values)
-        & np.isfinite(kd_values)
-    )
-
-    barrier_mask = np.zeros(depth_values.shape, dtype=bool)
-    if exposed_mask is not None:
-        barrier_mask |= np.asarray(exposed_mask, dtype=bool)
-    if settings['treat_min_depth_as_barrier']:
-        barrier_mask |= (
-            valid_water
-            & (depth_values <= (float(depth_min) + settings['barrier_depth_margin_m']))
-            & (sdi_values >= settings['barrier_min_sdi'])
-        )
-
-    water_mask = valid_water & ~barrier_mask
     empty_reference = ma.masked_all(depth.shape, dtype='float32')
     if not np.any(water_mask):
         return {
@@ -1877,14 +1994,19 @@ def _build_false_deep_correction_plan(depth_data, sdi_data, error_f_data, slope_
             'rerun_items': [],
         }
 
-    confident_mask = (
-        water_mask
-        & (sdi_values >= settings['anchor_min_sdi'])
-        & (depth_values <= settings['anchor_max_depth_m'])
-        & (depth_values >= (float(depth_min) + settings['anchor_min_depth_margin_m']))
-        & (slope_values <= settings['anchor_max_slope_percent'])
-        & (error_values <= settings['anchor_max_error_f'])
-    )
+    if base_confident_mask is None:
+        confident_mask = _build_false_deep_confident_mask(
+            depth,
+            sdi,
+            error_f,
+            slope,
+            settings,
+            depth_min,
+            exposed_mask=exposed_mask,
+            required_data=(chl, cdom, nap, kd),
+        )
+    else:
+        confident_mask = np.asarray(base_confident_mask, dtype=bool) & water_mask
     if extra_confident_mask is not None:
         confident_mask |= (np.asarray(extra_confident_mask, dtype=bool) & water_mask)
 
@@ -3359,9 +3481,7 @@ def _select_suspicious_frontier(suspicious_mask, confident_mask, already_done_ma
     structure = np.ones((3, 3), dtype=bool)
     neighbour_mask = ndimage.binary_dilation(confident_mask | already_done_mask, structure=structure)
     frontier_mask = pending_mask & neighbour_mask
-    if np.any(frontier_mask):
-        return frontier_mask
-    return pending_mask
+    return frontier_mask
 
 if __name__ == "__main__":
     #try:
@@ -4210,6 +4330,7 @@ if __name__ == "__main__":
             false_deep_corrected_pixel_count = 0
             false_deep_reoptimised_mask = np.zeros((height, width), dtype=bool)
             false_deep_attempt_count = np.zeros((height, width), dtype=np.uint8)
+            false_deep_effective_settings = None
             if false_deep_correction_settings.get('enabled'):
                 lat_for_correction = lat_array if lat_array is not None else image_info.get('lat_grid')
                 lon_for_correction = lon_array if lon_array is not None else image_info.get('lon_grid')
@@ -4244,12 +4365,50 @@ if __name__ == "__main__":
                         dx_m=dx_m,
                         dy_m=dy_m,
                     )
+                    false_deep_effective_settings = _derive_scene_adaptive_false_deep_settings(
+                        depth_for_plan,
+                        sdi_for_plan,
+                        error_for_plan,
+                        slope_before,
+                        false_deep_correction_settings,
+                        float(pmin[3]),
+                        exposed_mask=bathy_exposed_mask,
+                        required_data=(
+                            correction_recorder.chl,
+                            correction_recorder.cdom,
+                            correction_recorder.nap,
+                            correction_recorder.kd,
+                        ),
+                    )
+                    print(
+                        "[INFO]: False-deep adaptive thresholds: "
+                        f"anchor_min_sdi={false_deep_effective_settings['anchor_min_sdi']:.4f}, "
+                        f"anchor_max_error_f={false_deep_effective_settings['anchor_max_error_f']:.6f}, "
+                        f"search_radius_px={int(false_deep_effective_settings['search_radius_px'])}."
+                    )
+                    locked_confident_mask = _build_false_deep_confident_mask(
+                        depth_for_plan,
+                        sdi_for_plan,
+                        error_for_plan,
+                        slope_before,
+                        false_deep_effective_settings,
+                        float(pmin[3]),
+                        exposed_mask=bathy_exposed_mask,
+                        required_data=(
+                            correction_recorder.chl,
+                            correction_recorder.cdom,
+                            correction_recorder.nap,
+                            correction_recorder.kd,
+                        ),
+                    )
                     correction_plan = None
-                    extra_confident_mask = np.zeros((height, width), dtype=bool)
+                    accepted_confident_mask = np.zeros((height, width), dtype=bool)
+                    suspect_mask = np.zeros((height, width), dtype=bool)
                     rerun_wave = 0
                     rerun_executor = None
                     try:
                         while True:
+                            stable_confident_mask = locked_confident_mask | accepted_confident_mask
                             depth_for_plan = ma.masked_array(correction_recorder.depth, mask=(correction_recorder.success < 1))
                             sdi_for_plan = ma.masked_array(correction_recorder.sdi, mask=(correction_recorder.success < 1))
                             error_for_plan = ma.masked_array(correction_recorder.error_alpha_f, mask=(correction_recorder.success < 1))
@@ -4273,30 +4432,35 @@ if __name__ == "__main__":
                                 correction_recorder.sub1_frac,
                                 correction_recorder.sub2_frac,
                                 correction_recorder.sub3_frac,
-                                false_deep_correction_settings,
+                                false_deep_effective_settings,
                                 float(pmin[3]),
                                 siop['p_bounds'],
                                 exposed_mask=bathy_exposed_mask,
                                 dx_m=dx_m,
                                 dy_m=dy_m,
-                                extra_confident_mask=extra_confident_mask,
+                                extra_confident_mask=accepted_confident_mask,
+                                base_confident_mask=locked_confident_mask,
                                 lock_water_parameters=(deep_water_prior_stats is not None),
                             )
                             suspect_mask = np.asarray(correction_plan['suspicious_mask'], dtype=bool)
                             eligible_mask = suspect_mask & (
-                                false_deep_attempt_count < int(false_deep_correction_settings['max_rerun_attempts'])
+                                ~stable_confident_mask
+                                & (false_deep_attempt_count < int(false_deep_effective_settings['max_rerun_attempts']))
                             )
                             pending_count = int(np.count_nonzero(eligible_mask))
                             if pending_count <= 0:
                                 break
                             frontier_mask = _select_suspicious_frontier(
                                 eligible_mask,
-                                correction_plan['confident_mask'],
+                                stable_confident_mask,
                                 np.zeros_like(eligible_mask, dtype=bool),
                             )
                             pixel_constraints = [
                                 item for item in (correction_plan.get('rerun_items') or [])
-                                if frontier_mask[int(item['x']), int(item['y'])]
+                                if (
+                                    frontier_mask[int(item['x']), int(item['y'])]
+                                    and not stable_confident_mask[int(item['x']), int(item['y'])]
+                                )
                             ]
                             if not pixel_constraints:
                                 break
@@ -4349,7 +4513,7 @@ if __name__ == "__main__":
                                 executor=rerun_executor,
                             )
                             accepted_this_wave = 0
-                            stable_mask = np.asarray(correction_plan['confident_mask'], dtype=bool)
+                            stable_mask = stable_confident_mask.copy()
                             for item in pixel_constraints:
                                 row = int(item['x'])
                                 col = int(item['y'])
@@ -4360,9 +4524,9 @@ if __name__ == "__main__":
                                     stable_mask,
                                     row,
                                     col,
-                                    false_deep_correction_settings,
+                                    false_deep_effective_settings,
                                 ):
-                                    extra_confident_mask[row, col] = True
+                                    accepted_confident_mask[row, col] = True
                                     accepted_this_wave += 1
                                 else:
                                     _restore_result_recorder_pixel(correction_recorder, pixel_state, row, col)
@@ -4409,6 +4573,8 @@ if __name__ == "__main__":
                         correction_debug_layers = [
                             ('_depth_reoptimised_pixels.tif', 'depth_reoptimised_pixels', reoptimised_mask),
                             ('_depth_correction_mask.tif', 'depth_correction_mask', corrected_mask),
+                            ('_depth_correction_locked_confident_mask.tif', 'depth_correction_locked_confident_mask', ma.masked_array(locked_confident_mask.astype('float32'))),
+                            ('_depth_correction_accepted_confident_mask.tif', 'depth_correction_accepted_confident_mask', ma.masked_array(accepted_confident_mask.astype('float32'))),
                             ('_depth_correction_confident_mask.tif', 'depth_correction_confident_mask', ma.masked_array(correction_plan['confident_mask'].astype('float32'))),
                             ('_depth_correction_reference_depth.tif', 'depth_correction_reference_depth', correction_plan['reference_depth']),
                             ('_depth_correction_reference_tolerance.tif', 'depth_correction_reference_tolerance', correction_plan['reference_tolerance']),
@@ -4470,6 +4636,10 @@ if __name__ == "__main__":
                 try:
                     xml_dict['false_deep_correction_enabled'] = false_deep_correction_settings.get('enabled', False)
                     xml_dict['false_deep_corrected_pixel_count'] = false_deep_corrected_pixel_count
+                    if false_deep_effective_settings is not None:
+                        xml_dict['false_deep_effective_anchor_min_sdi'] = false_deep_effective_settings['anchor_min_sdi']
+                        xml_dict['false_deep_effective_anchor_max_error_f'] = false_deep_effective_settings['anchor_max_error_f']
+                        xml_dict['false_deep_effective_search_radius_px'] = false_deep_effective_settings['search_radius_px']
                     log_dir = os.path.dirname(ofile)
                     log_name = f'log_{input_base}.xml' if input_base else 'log_output.xml'
                     log_path = os.path.join(log_dir, log_name) if log_dir else log_name
