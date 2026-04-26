@@ -128,7 +128,7 @@ def _md5(path):
 
 def _run_update_thread(tag, log_cb, done_cb):
     """
-    Execute git + optional conda update in a daemon thread.
+    Execute git + conda environment refresh in a daemon thread.
 
     log_cb(str)        — called from the thread; UI must schedule to main thread.
     done_cb(bool)      — called on completion with success=True/False.
@@ -165,21 +165,28 @@ def _run_update_thread(tag, log_cb, done_cb):
             new_env_hash = _md5(_ENV_YML)
 
             if old_env_hash != new_env_hash:
-                log_cb("environment.yml changed — updating conda environment…")
-                conda = _find_conda()
-                if conda is None:
-                    log_cb("WARNING: conda not found; skipping environment update.")
-                    log_cb("Run  conda env update -n SwampySim -f environment.yml  manually.")
-                else:
-                    _cmd(
-                        [conda, "env", "update",
-                         "-n", CONDA_ENV_NAME,
-                         "-f", _ENV_YML,
-                         "--prune"],
-                        shell=(conda.endswith(".bat")),
-                    )
+                log_cb("environment.yml changed — updating conda environment with prune…")
             else:
-                log_cb("environment.yml unchanged — skipping conda update.")
+                log_cb("Refreshing conda environment from environment.yml with prune…")
+
+            if not os.path.isfile(_ENV_YML):
+                raise RuntimeError("environment.yml not found; cannot update conda environment.")
+
+            conda = _find_conda()
+            if conda is None:
+                raise RuntimeError(
+                    "conda not found; run "
+                    f"conda env update -n {CONDA_ENV_NAME} -f environment.yml --prune "
+                    "manually, then restart Swampy."
+                )
+
+            _cmd(
+                [conda, "env", "update",
+                 "-n", CONDA_ENV_NAME,
+                 "-f", _ENV_YML,
+                 "--prune"],
+                shell=(conda.endswith(".bat")),
+            )
 
             log_cb("Update complete.")
             done_cb(True)

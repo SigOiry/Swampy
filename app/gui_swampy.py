@@ -6,6 +6,7 @@ Created on Tue Jun 18 15:14:44 2019
 """
 
 import ctypes
+import copy
 import datetime
 import json
 import os
@@ -1344,7 +1345,8 @@ def gui():
         "anchor_min_depth_margin_m": 0.5,
         "suspect_max_sdi": 1.0,
         "suspect_min_slope_percent": 10.0,
-        "suspect_min_depth_jump_m": 2.0,
+        "suspect_growth_depth_fraction": 0.15,
+        "suspect_growth_sdi_margin": 0.20,
         "search_radius_px": 12,
         "min_anchor_count": 4,
         "correction_tolerance_m": 1.5,
@@ -1352,6 +1354,13 @@ def gui():
         "treat_min_depth_as_barrier": True,
         "barrier_depth_margin_m": 0.25,
         "barrier_min_sdi": 3.0,
+        "protect_true_deep_water": True,
+        "true_deep_min_enclosure_fraction": 0.25,
+        "true_deep_border_min_enclosure_fraction": 0.40,
+        "true_deep_min_anchor_quadrants": 2,
+        "true_deep_border_min_anchor_quadrants": 3,
+        "true_deep_large_patch_size_px": 128,
+        "true_deep_smooth_slope_percent": 5.0,
         "debug_export": False,
     }
 
@@ -1444,6 +1453,9 @@ def gui():
         update_run_button_state()
 
     run_button = None
+    versions_button = None
+    saved_run_versions = []
+    active_run_versions = []
 
     def _set_widget_enabled(widget, enabled):
         try:
@@ -2016,7 +2028,7 @@ def gui():
         _set_widget_enabled(run_button, _get_form_validation_error() is None)
 
     def open_feature_popup(title, description, settings_builder=None, apply_callback=None,
-                           geometry="760x300", minsize=(700, 240)):
+                           geometry="760x300", minsize=(700, 240), max_height_ratio=0.6):
         popup = tk.Toplevel(root)
         popup.title(title)
         preferred_size = _parse_geometry_size(geometry)
@@ -2027,7 +2039,7 @@ def gui():
             width_ratio=0.62,
             height_ratio=0.34,
             max_width_ratio=0.78,
-            max_height_ratio=0.6,
+            max_height_ratio=max_height_ratio,
         )
         popup.transient(root)
         popup.grab_set()
@@ -2062,8 +2074,10 @@ def gui():
 
             def apply_and_close():
                 try:
-                    apply_callback()
+                    result = apply_callback()
                 except Exception:
+                    return
+                if result is False:
                     return
                 popup.destroy()
 
@@ -2106,9 +2120,63 @@ def gui():
 
     def open_false_deep_correction_popup():
         debug_export_var = BooleanVar(value=bool(false_deep_correction_config["debug_export"]))
+        protect_true_deep_var = BooleanVar(value=bool(false_deep_correction_config["protect_true_deep_water"]))
+        min_depth_barrier_var = BooleanVar(value=bool(false_deep_correction_config["treat_min_depth_as_barrier"]))
         available = bathy_mode.get() == "estimate"
+        numeric_fields = [
+            ("Anchor min SDI", "anchor_min_sdi"),
+            ("Anchor max depth (m)", "anchor_max_depth_m"),
+            ("Anchor max slope (%)", "anchor_max_slope_percent"),
+            ("Anchor max error F", "anchor_max_error_f"),
+            ("Anchor depth margin (m)", "anchor_min_depth_margin_m"),
+            ("Min anchor count", "min_anchor_count"),
+            ("Suspicious max SDI", "suspect_max_sdi"),
+            ("Seed min slope (%)", "suspect_min_slope_percent"),
+            ("Growth depth fraction", "suspect_growth_depth_fraction"),
+            ("Growth SDI margin", "suspect_growth_sdi_margin"),
+            ("Interpolation radius (px)", "search_radius_px"),
+            ("Max patch size (px)", "max_patch_size_px"),
+            ("Barrier depth margin (m)", "barrier_depth_margin_m"),
+            ("Barrier min SDI", "barrier_min_sdi"),
+            ("Enclosure fraction", "true_deep_min_enclosure_fraction"),
+            ("Border enclosure", "true_deep_border_min_enclosure_fraction"),
+            ("Anchor quadrants", "true_deep_min_anchor_quadrants"),
+            ("Border quadrants", "true_deep_border_min_anchor_quadrants"),
+            ("Large patch size (px)", "true_deep_large_patch_size_px"),
+            ("Smooth true-deep slope (%)", "true_deep_smooth_slope_percent"),
+        ]
+        int_keys = {
+            "search_radius_px",
+            "min_anchor_count",
+            "max_patch_size_px",
+            "true_deep_min_anchor_quadrants",
+            "true_deep_border_min_anchor_quadrants",
+            "true_deep_large_patch_size_px",
+        }
+        fraction_keys = {
+            "suspect_growth_depth_fraction",
+            "true_deep_min_enclosure_fraction",
+            "true_deep_border_min_enclosure_fraction",
+        }
+
+        def _format_config_value(value):
+            if isinstance(value, int) and not isinstance(value, bool):
+                return str(value)
+            try:
+                return f"{float(value):g}"
+            except (TypeError, ValueError):
+                return str(value)
+
+        numeric_vars = {
+            key: StringVar(value=_format_config_value(false_deep_correction_config[key]))
+            for _, key in numeric_fields
+        }
+        status_var = StringVar(value="")
+        entry_widgets = []
 
         def build_settings(settings_frame):
+            for col in range(4):
+                settings_frame.columnconfigure(col, weight=1 if col in (1, 3) else 0)
             ttk.Label(
                 settings_frame,
                 text=(
@@ -2118,29 +2186,126 @@ def gui():
                 ),
                 wraplength=620,
                 justify="left",
-            ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+            ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
+
+            def add_section(row, text):
+                ttk.Label(settings_frame, text=text).grid(
+                    row=row,
+                    column=0,
+                    columnspan=4,
+                    sticky="w",
+                    pady=(8, 2),
+                )
+
+            def add_numeric(row, pair_index, label, key):
+                label_col = 0 if pair_index == 0 else 2
+                entry_col = label_col + 1
+                ttk.Label(settings_frame, text=label).grid(
+                    row=row,
+                    column=label_col,
+                    sticky="w",
+                    padx=(0 if pair_index == 0 else 16, 6),
+                    pady=2,
+                )
+                entry = ttk.Entry(settings_frame, textvariable=numeric_vars[key], width=12, justify="right")
+                entry.grid(row=row, column=entry_col, sticky="ew", pady=2)
+                entry_widgets.append(entry)
+                _set_widget_enabled(entry, available)
+
+            row = 1
+            add_section(row, "Confident pixel map")
+            row += 1
+            for index, item in enumerate(numeric_fields[:6]):
+                add_numeric(row + index // 2, index % 2, item[0], item[1])
+            row += 3
+
+            add_section(row, "Suspicious seed and growth")
+            row += 1
+            for index, item in enumerate(numeric_fields[6:12]):
+                add_numeric(row + index // 2, index % 2, item[0], item[1])
+            row += 3
+
+            add_section(row, "True-deep safeguards")
+            row += 1
+            protect_check = ttk.Checkbutton(
+                settings_frame,
+                text="Protect true deep water",
+                variable=protect_true_deep_var,
+            )
+            protect_check.grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+            barrier_check = ttk.Checkbutton(
+                settings_frame,
+                text="Treat minimum depth as barrier",
+                variable=min_depth_barrier_var,
+            )
+            barrier_check.grid(row=row, column=2, columnspan=2, sticky="w", padx=(16, 0), pady=2)
+            _set_widget_enabled(protect_check, available)
+            _set_widget_enabled(barrier_check, available)
+            row += 1
+            for index, item in enumerate(numeric_fields[12:]):
+                add_numeric(row + index // 2, index % 2, item[0], item[1])
+            row += 4
+
             debug_check = ttk.Checkbutton(
                 settings_frame,
                 text="Export debug rasters",
                 variable=debug_export_var,
             )
-            debug_check.grid(row=1, column=0, sticky="w")
+            debug_check.grid(row=row, column=0, columnspan=2, sticky="w", pady=(8, 0))
             _set_widget_enabled(debug_check, available)
+            ttk.Label(settings_frame, textvariable=status_var, foreground="red").grid(
+                row=row + 1,
+                column=0,
+                columnspan=4,
+                sticky="w",
+                pady=(6, 0),
+            )
 
         def apply_false_deep_correction_changes():
+            parsed_values = {}
+            for label, key in numeric_fields:
+                raw_value = numeric_vars[key].get().strip()
+                try:
+                    if key in int_keys:
+                        parsed = int(float(raw_value))
+                    else:
+                        parsed = float(raw_value)
+                except (TypeError, ValueError):
+                    status_var.set(f"{label} must be numeric.")
+                    return False
+
+                if key in int_keys and parsed <= 0:
+                    status_var.set(f"{label} must be greater than zero.")
+                    return False
+                if key not in int_keys and parsed < 0.0:
+                    status_var.set(f"{label} must be zero or greater.")
+                    return False
+                if key in fraction_keys and parsed > 1.0:
+                    status_var.set(f"{label} must be between 0 and 1.")
+                    return False
+                if key in {"true_deep_min_anchor_quadrants", "true_deep_border_min_anchor_quadrants"} and parsed > 4:
+                    status_var.set(f"{label} must be between 1 and 4.")
+                    return False
+                parsed_values[key] = parsed
+
+            false_deep_correction_config.update(parsed_values)
+            false_deep_correction_config["protect_true_deep_water"] = bool(protect_true_deep_var.get())
+            false_deep_correction_config["treat_min_depth_as_barrier"] = bool(min_depth_barrier_var.get())
             false_deep_correction_config["debug_export"] = bool(debug_export_var.get())
+            return True
 
         open_feature_popup(
             "False-deep bathymetry correction",
-            "This optional second pass works automatically.\n\n"
+            "This optional second pass is tunable.\n\n"
             "1. It marks confident pixels using fit quality, depth, SDI, and local continuity.\n"
-            "2. It marks suspicious low-SDI deep pixels that look inconsistent with nearby confident water.\n"
+            "2. It seeds suspicious low-SDI pixels on the deeper side of steep depth slopes.\n"
             "3. It rebuilds local starting values from surrounding confident pixels.\n"
             "4. It re-optimises suspicious pixels with tight local bounds so adjacent depths stay physically coherent.",
             settings_builder=build_settings,
             apply_callback=apply_false_deep_correction_changes,
-            geometry="780x340",
-            minsize=(720, 280),
+            geometry="980x760",
+            minsize=(900, 620),
+            max_height_ratio=0.82,
         )
 
     def open_initial_guess_popup():
@@ -3371,24 +3536,135 @@ def gui():
             wraplength=430,
         ).grid(row=0, column=1, sticky="w", padx=(10, 0))
 
+        scalar_vars = {}
+        for key, _label, _required in siop_config.SIOP_SCALAR_FIELDS:
+            scalar_vars[key] = StringVar(value=local_scalar_values.get(key, ""))
+
+        scalar_summary_var = StringVar()
+
+        def refresh_scalar_summary():
+            missing_required = []
+            invalid_values = []
+            for key, label, required in siop_config.SIOP_SCALAR_FIELDS:
+                text = scalar_vars[key].get().strip()
+                if not text:
+                    if required:
+                        missing_required.append(label)
+                    continue
+                try:
+                    float(text)
+                except ValueError:
+                    invalid_values.append(label)
+            if invalid_values:
+                scalar_summary_var.set(f"{len(invalid_values)} numeric parameter(s) need valid numbers.")
+            elif missing_required:
+                scalar_summary_var.set(f"{len(missing_required)} required numeric parameter(s) are empty.")
+            else:
+                scalar_summary_var.set(f"{len(siop_config.SIOP_SCALAR_FIELDS)} numeric parameter(s) configured.")
+
+        def open_numeric_parameters_popup():
+            numeric_popup = tk.Toplevel(popup)
+            numeric_popup.title("Water & Bottom Numeric Parameters")
+            apply_window_size(
+                numeric_popup,
+                preferred_size=(980, 520),
+                minsize=(820, 420),
+                width_ratio=0.72,
+                height_ratio=0.54,
+                max_width_ratio=0.82,
+                max_height_ratio=0.68,
+            )
+            numeric_popup.transient(popup)
+            numeric_popup.grab_set()
+            numeric_popup.columnconfigure(0, weight=1)
+            numeric_popup.rowconfigure(0, weight=1)
+
+            draft_vars = {
+                key: StringVar(value=scalar_vars[key].get())
+                for key, _label, _required in siop_config.SIOP_SCALAR_FIELDS
+            }
+            status_var = StringVar()
+
+            container = ttk.Frame(numeric_popup, padding=12)
+            container.grid(row=0, column=0, sticky="nsew")
+            for column_index in range(4):
+                container.columnconfigure(column_index, weight=1 if column_index in (1, 3) else 0)
+            container.rowconfigure(8, weight=1)
+
+            ttk.Label(
+                container,
+                text="These values control the water IOP and backscattering model used by the inversion.",
+                justify="left",
+                wraplength=780,
+            ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+
+            for idx, (key, label, required) in enumerate(siop_config.SIOP_SCALAR_FIELDS):
+                row = 1 + idx // 2
+                col = (idx % 2) * 2
+                label_text = f"{label}{' *' if required else ''}"
+                ttk.Label(
+                    container,
+                    text=label_text,
+                    justify="left",
+                    wraplength=250,
+                ).grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else 18, 6), pady=3)
+                ttk.Entry(
+                    container,
+                    textvariable=draft_vars[key],
+                    justify="right",
+                    width=14,
+                ).grid(row=row, column=col + 1, sticky="ew", pady=3)
+
+            ttk.Label(container, text="* Required", foreground="#555").grid(
+                row=8,
+                column=0,
+                columnspan=4,
+                sticky="sw",
+                pady=(8, 0),
+            )
+            ttk.Label(container, textvariable=status_var, foreground="red").grid(
+                row=9,
+                column=0,
+                columnspan=4,
+                sticky="w",
+                pady=(6, 0),
+            )
+
+            def apply_numeric_parameters():
+                draft_values = {key: var.get().strip() for key, var in draft_vars.items()}
+                try:
+                    siop_config.validate_scalar_values(draft_values)
+                except Exception as exc:
+                    status_var.set(str(exc))
+                    return
+                for key, value in draft_values.items():
+                    scalar_vars[key].set(value)
+                refresh_scalar_summary()
+                numeric_popup.destroy()
+
+            numeric_actions = ttk.Frame(container)
+            numeric_actions.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+            numeric_actions.columnconfigure(0, weight=1)
+            ttk.Button(numeric_actions, text="Cancel", command=numeric_popup.destroy).grid(row=0, column=1, sticky="e", padx=(8, 0))
+            ttk.Button(numeric_actions, text="Apply", command=apply_numeric_parameters).grid(row=0, column=2, sticky="e", padx=(8, 0))
+
+            center_window(numeric_popup)
+            numeric_popup.wait_window()
+
         scalar_frame = ttk.Frame(preview_frame)
         scalar_frame.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 4))
-        for column_index in range(4):
-            scalar_frame.columnconfigure(column_index, weight=1)
-
-        scalar_vars = {}
-        for idx, (key, label, _required) in enumerate(siop_config.SIOP_SCALAR_FIELDS):
-            row = idx // 2
-            col = (idx % 2) * 2
-            ttk.Label(
-                scalar_frame,
-                text=label,
-                justify="left",
-                wraplength=220,
-            ).grid(row=row, column=col, sticky="w", padx=(0, 6), pady=2)
-            var = StringVar(value=local_scalar_values.get(key, ""))
-            scalar_vars[key] = var
-            ttk.Entry(scalar_frame, textvariable=var, justify="right").grid(row=row, column=col + 1, sticky="ew", pady=2)
+        scalar_frame.columnconfigure(1, weight=1)
+        ttk.Button(
+            scalar_frame,
+            text="Advanced numeric parameters",
+            command=open_numeric_parameters_popup,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            scalar_frame,
+            textvariable=scalar_summary_var,
+            justify="left",
+            wraplength=430,
+        ).grid(row=0, column=1, sticky="w", padx=(10, 0))
 
         popup_status_var = StringVar()
         hovered_spectrum_name = {"name": None}
@@ -3876,6 +4152,7 @@ def gui():
 
         refresh_spectra_listbox(local_selected_names)
         refresh_absorption_summary()
+        refresh_scalar_summary()
         center_window(popup)
         popup.wait_window()
 
@@ -4591,8 +4868,411 @@ def gui():
     add_option_row(out_opts_frame, 0, "Output modeled reflectance", output_modeled_reflectance_flag, open_modeled_reflectance_popup)
     add_option_row(out_opts_frame, 1, "Output spectral parameters", pp, open_post_processing_popup)
 
+    def _current_parameter_bounds():
+        return (
+            [
+                float(chl_min_var.get()),
+                float(cdom_min_var.get()),
+                float(nap_min_var.get()),
+                float(depth_min_var.get()),
+                float(sub1_min_var.get()),
+                float(sub2_min_var.get()),
+                float(sub3_min_var.get()),
+            ],
+            [
+                float(chl_max_var.get()),
+                float(cdom_max_var.get()),
+                float(nap_max_var.get()),
+                float(depth_max_var.get()),
+                float(sub1_max_var.get()),
+                float(sub2_max_var.get()),
+                float(sub3_max_var.get()),
+            ],
+        )
+
+    def _run_version_suffix(index):
+        return f"_settings{int(index):02d}"
+
+    def _run_version_summary(version):
+        pmin_values = version.get("pmin") or ["", "", "", ""]
+        pmax_values = version.get("pmax") or ["", "", "", ""]
+        depth_text = f"Depth {pmin_values[3]:g}-{pmax_values[3]:g} m" if len(pmin_values) > 3 and len(pmax_values) > 3 else "Depth bounds unavailable"
+        enabled_features = []
+        if version.get("false_deep_correction_settings", {}).get("enabled"):
+            enabled_features.append("false-deep")
+        if version.get("optimize_initial_guesses"):
+            enabled_features.append("initial guesses")
+        if version.get("relaxed"):
+            enabled_features.append("relaxed")
+        if version.get("shallow"):
+            enabled_features.append("shallow")
+        feature_text = ", ".join(enabled_features) if enabled_features else "standard"
+        return f"{version.get('label', 'Settings')}: {depth_text}; {feature_text}; {version.get('output_format', 'both')}"
+
+    def _capture_current_run_version(label=None, suffix=None):
+        validation_error = _get_form_validation_error()
+        if validation_error is not None:
+            raise ValueError(validation_error)
+        compiled_siop_candidate = build_current_siop()
+        compiled_sensor_candidate = build_current_sensor()
+        pmin_values, pmax_values = _current_parameter_bounds()
+        current_bathy_path = ""
+        bathy_reference = "depth"
+        bathy_correction_m = 0.0
+        bathy_tolerance_m = 0.0
+        if bathy_mode.get() == "input":
+            current_bathy_path = bathy_path_var.get() or _resolve_bundled_resource(cwd, os.path.join(cwd, "Data", "Bathy", "E4_2024.tif"))
+            bathy_reference = "hydrographic_zero" if user_defined_var.get() else "depth"
+            bathy_correction_m = float(bathy_correction.get() or 0.0)
+            bathy_tolerance_m = float(bathy_tolerance.get() or 0.0)
+
+        version_index = len(saved_run_versions) + 1
+        return {
+            "label": label or f"Settings {version_index:02d}",
+            "suffix": _run_version_suffix(version_index) if suffix is None else suffix,
+            "compiled_siop": compiled_siop_candidate,
+            "compiled_sensor": compiled_sensor_candidate,
+            "siop_log_payload": siop_config.build_log_payload(compiled_siop_candidate, template_config, spectral_library),
+            "sensor_log_payload": sensor_config.build_log_payload(compiled_sensor_candidate),
+            "pmin": pmin_values,
+            "pmax": pmax_values,
+            "rrs_flag": bool(above_rrs_flag.get()),
+            "reflectance_input": bool(reflectance_input_flag.get()),
+            "relaxed": bool(relaxed.get()),
+            "shallow": bool(shallow_flag.get()),
+            "optimize_initial_guesses": bool(optimize_initial_guesses_flag.get()),
+            "use_five_initial_guesses": bool(five_initial_guess_testing_flag.get()),
+            "initial_guess_debug": bool(initial_guess_debug_flag.get()),
+            "fully_relaxed": bool(fully_relaxed_flag.get()),
+            "output_modeled_reflectance": bool(output_modeled_reflectance_flag.get()),
+            "false_deep_correction_settings": {
+                "enabled": bool(false_deep_correction_flag.get()),
+                **copy.deepcopy(false_deep_correction_config),
+            },
+            "post_processing": bool(pp.get()),
+            "output_format": output_format.get(),
+            "allow_split": bool(allow_split.get()),
+            "split_chunk_rows": chunk_rows.get().strip(),
+            "crop_selection": copy.deepcopy(crop_selection),
+            "deep_water_selection": copy.deepcopy(deep_water_selection),
+            "deep_water_use_sd_bounds": bool(deep_water_use_sd_var.get()),
+            "use_bathy": bathy_mode.get() == "input",
+            "bathy_path": current_bathy_path,
+            "bathy_reference": bathy_reference,
+            "bathy_correction_m": bathy_correction_m,
+            "bathy_tolerance_m": bathy_tolerance_m,
+        }
+
+    def _active_run_version_count():
+        return max(1, len(saved_run_versions))
+
+    def update_run_version_controls():
+        count = _active_run_version_count()
+        if run_button is not None:
+            noun = "setting" if count == 1 else "settings"
+            run_button.configure(text=f"Run ({count} {noun})")
+        if versions_button is not None:
+            _set_widget_enabled(versions_button, bool(saved_run_versions))
+
+    def save_current_run_settings():
+        try:
+            version = _capture_current_run_version()
+        except Exception as exc:
+            messagebox.showerror("Cannot save settings", str(exc), parent=root)
+            return
+        saved_run_versions.append(version)
+        update_run_version_controls()
+        messagebox.showinfo("Settings saved", f"Saved {version['label']}.", parent=root)
+
+    def _run_version_signature(version):
+        signature_keys = (
+            "siop_log_payload",
+            "sensor_log_payload",
+            "pmin",
+            "pmax",
+            "rrs_flag",
+            "reflectance_input",
+            "relaxed",
+            "shallow",
+            "optimize_initial_guesses",
+            "use_five_initial_guesses",
+            "initial_guess_debug",
+            "fully_relaxed",
+            "output_modeled_reflectance",
+            "false_deep_correction_settings",
+            "post_processing",
+            "output_format",
+            "allow_split",
+            "split_chunk_rows",
+            "crop_selection",
+            "deep_water_selection",
+            "deep_water_use_sd_bounds",
+            "use_bathy",
+            "bathy_path",
+            "bathy_reference",
+            "bathy_correction_m",
+            "bathy_tolerance_m",
+        )
+
+        def normalise(value):
+            if isinstance(value, dict):
+                return {str(key): normalise(value[key]) for key in sorted(value.keys(), key=str)}
+            if isinstance(value, (list, tuple)):
+                return [normalise(item) for item in value]
+            if isinstance(value, np.generic):
+                return value.item()
+            return value
+
+        comparable = {
+            key: normalise(version.get(key))
+            for key in signature_keys
+        }
+        return json.dumps(comparable, sort_keys=True, separators=(",", ":"), default=str)
+
+    def _run_version_already_saved(version):
+        current_signature = _run_version_signature(version)
+        return any(_run_version_signature(saved_version) == current_signature for saved_version in saved_run_versions)
+
+    def open_run_versions_popup():
+        if not saved_run_versions:
+            messagebox.showinfo("Saved settings", "No saved setting versions yet.", parent=root)
+            return
+
+        versions_popup = tk.Toplevel(root)
+        versions_popup.title("Saved Run Settings")
+        apply_window_size(
+            versions_popup,
+            preferred_size=(1120, 620),
+            minsize=(900, 460),
+            width_ratio=0.78,
+            height_ratio=0.62,
+            max_width_ratio=0.90,
+            max_height_ratio=0.78,
+        )
+        versions_popup.transient(root)
+        versions_popup.grab_set()
+        versions_popup.columnconfigure(0, weight=1)
+        versions_popup.rowconfigure(0, weight=1)
+
+        container = ttk.Frame(versions_popup, padding=12)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+        container.columnconfigure(2, weight=2)
+        container.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            container,
+            text="These saved setting versions will be run for every selected input image. Select one version to inspect it, or select exactly two versions to compare only the settings that differ.",
+            wraplength=700,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+
+        versions_listbox = tk.Listbox(container, selectmode=tk.EXTENDED, exportselection=False, height=12)
+        versions_listbox.grid(row=1, column=0, sticky="nsew")
+        versions_scroll = ttk.Scrollbar(container, orient="vertical", command=versions_listbox.yview)
+        versions_scroll.grid(row=1, column=1, sticky="ns")
+        versions_listbox.configure(yscrollcommand=versions_scroll.set)
+
+        detail_frame = ttk.Labelframe(container, text="Summary / comparison")
+        detail_frame.grid(row=1, column=2, sticky="nsew", padx=(12, 0))
+        detail_frame.columnconfigure(0, weight=1)
+        detail_frame.rowconfigure(0, weight=1)
+        detail_text = tk.Text(detail_frame, wrap="word", height=12, width=58, state="disabled")
+        detail_text.grid(row=0, column=0, sticky="nsew")
+        detail_scroll = ttk.Scrollbar(detail_frame, orient="vertical", command=detail_text.yview)
+        detail_scroll.grid(row=0, column=1, sticky="ns")
+        detail_text.configure(yscrollcommand=detail_scroll.set)
+
+        def _format_setting_value(value):
+            if isinstance(value, bool):
+                return "yes" if value else "no"
+            if value is None:
+                return ""
+            if isinstance(value, float):
+                return f"{value:g}"
+            if isinstance(value, (list, tuple)):
+                if not value:
+                    return "none"
+                shown = [_format_setting_value(item) for item in list(value)[:10]]
+                suffix = "" if len(value) <= 10 else f", ... ({len(value)} total)"
+                return ", ".join(shown) + suffix
+            if isinstance(value, dict):
+                return json.dumps(value, sort_keys=True)
+            return str(value)
+
+        def _version_setting_rows(version):
+            rows = []
+
+            def add(section, label, value):
+                rows.append((section, label, _format_setting_value(value)))
+
+            siop_payload = version.get("siop_log_payload") or {}
+            sensor_payload = version.get("sensor_log_payload") or {}
+            false_deep = version.get("false_deep_correction_settings") or {}
+            pmin_values = list(version.get("pmin") or [])
+            pmax_values = list(version.get("pmax") or [])
+
+            add("Run", "Label", version.get("label", ""))
+            add("Run", "Output format", version.get("output_format", ""))
+            add("Run", "Post-processing", version.get("post_processing", False))
+            add("Run", "Output modeled reflectance", version.get("output_modeled_reflectance", False))
+            add("Run", "Allow image splitting", version.get("allow_split", False))
+            add("Run", "Rows per split chunk", version.get("split_chunk_rows", ""))
+
+            add("Input", "Crop enabled", bool(version.get("crop_selection")))
+            crop = version.get("crop_selection") or {}
+            if crop.get("bbox"):
+                bbox = crop["bbox"]
+                add("Input", "Crop longitude", f"{bbox.get('min_lon', '')} to {bbox.get('max_lon', '')}")
+                add("Input", "Crop latitude", f"{bbox.get('min_lat', '')} to {bbox.get('max_lat', '')}")
+            add("Input", "Deep-water priors", bool(version.get("deep_water_selection")))
+            add("Input", "Deep-water mean +/- sd bounds", version.get("deep_water_use_sd_bounds", False))
+
+            add("Water & bottom", "Selected targets", siop_payload.get("selected_targets", []))
+            add("Water & bottom", "Substrate names", siop_payload.get("xml_substrate_names", []))
+            add("Water & bottom", "Water absorption source", siop_payload.get("a_water_source", ""))
+            add("Water & bottom", "Chlorophyll absorption source", siop_payload.get("a_ph_star_source", ""))
+            for key, label, _required in siop_config.SIOP_SCALAR_FIELDS:
+                add("Water & bottom", label, siop_payload.get(key, ""))
+
+            bound_labels = ["CHL", "CDOM", "NAP", "Depth", "Substrate 1", "Substrate 2", "Substrate 3"]
+            substrate_names = siop_payload.get("xml_substrate_names") or []
+            for index, name in enumerate(substrate_names[:3], start=4):
+                if index < len(bound_labels):
+                    bound_labels[index] = name
+            for index, label in enumerate(bound_labels):
+                min_value = pmin_values[index] if index < len(pmin_values) else ""
+                max_value = pmax_values[index] if index < len(pmax_values) else ""
+                add("Parameter bounds", label, f"{_format_setting_value(min_value)} to {_format_setting_value(max_value)}")
+
+            add("Sensor", "Sensor name", sensor_payload.get("sensor_name", ""))
+            add("Sensor", "Selected band count", sensor_payload.get("selected_band_count", ""))
+            add("Sensor", "Selected band centers", sensor_payload.get("selected_band_centers", []))
+            add("Sensor", "Band mapping enabled", sensor_payload.get("sensor_band_mapping_enabled", False))
+            add("Sensor", "Band mapping mode", sensor_payload.get("sensor_band_mapping_mode", ""))
+
+            add("Processing", "Above-water Rrs input", version.get("rrs_flag", True))
+            add("Processing", "Reflectance input", version.get("reflectance_input", False))
+            add("Processing", "Relaxed constraints", version.get("relaxed", False))
+            add("Processing", "Fully relaxed", version.get("fully_relaxed", False))
+            add("Processing", "Shallow water adjustment", version.get("shallow", False))
+            add("Processing", "Optimise initial guesses", version.get("optimize_initial_guesses", False))
+            add("Processing", "Use 5 initial guesses", version.get("use_five_initial_guesses", False))
+            add("Processing", "Initial guess debug", version.get("initial_guess_debug", False))
+
+            add("Bathymetry", "Use input bathymetry", version.get("use_bathy", False))
+            add("Bathymetry", "Bathymetry path", version.get("bathy_path", ""))
+            add("Bathymetry", "Bathymetry reference", version.get("bathy_reference", ""))
+            add("Bathymetry", "Water level correction (m)", version.get("bathy_correction_m", ""))
+            add("Bathymetry", "Depth bounds around bathy (m)", version.get("bathy_tolerance_m", ""))
+
+            for key, value in false_deep.items():
+                label = key.replace("_", " ")
+                add("False-deep correction", label, value)
+
+            return rows
+
+        def _set_detail_text(text):
+            detail_text.configure(state="normal")
+            detail_text.delete("1.0", tk.END)
+            detail_text.insert(tk.END, text)
+            detail_text.configure(state="disabled")
+
+        def _render_single_version(version):
+            lines = []
+            current_section = None
+            for section, label, value in _version_setting_rows(version):
+                if section != current_section:
+                    if lines:
+                        lines.append("")
+                    lines.append(section)
+                    lines.append("-" * len(section))
+                    current_section = section
+                lines.append(f"{label}: {value}")
+            return "\n".join(lines)
+
+        def _render_version_comparison(left, right):
+            left_rows = _version_setting_rows(left)
+            right_map = {
+                (section, label): value
+                for section, label, value in _version_setting_rows(right)
+            }
+            lines = [
+                f"Different settings: {left.get('label', 'Version A')} vs {right.get('label', 'Version B')}",
+                "",
+            ]
+            current_section = None
+            difference_count = 0
+            for section, label, left_value in left_rows:
+                if section == "Run" and label == "Label":
+                    continue
+                key = (section, label)
+                right_value = right_map.get(key, "")
+                if left_value == right_value:
+                    continue
+                if section != current_section:
+                    if difference_count:
+                        lines.append("")
+                    lines.append(section)
+                    lines.append("-" * len(section))
+                    current_section = section
+                lines.append(f"{label}:")
+                lines.append(f"  {left.get('label', 'Version A')}: {left_value}")
+                lines.append(f"  {right.get('label', 'Version B')}: {right_value}")
+                difference_count += 1
+            if difference_count == 0:
+                lines.append("No differences found.")
+            return "\n".join(lines)
+
+        def update_versions_detail(_event=None):
+            selected = list(versions_listbox.curselection())
+            if len(selected) == 1:
+                _set_detail_text(_render_single_version(saved_run_versions[selected[0]]))
+            elif len(selected) == 2:
+                _set_detail_text(_render_version_comparison(
+                    saved_run_versions[selected[0]],
+                    saved_run_versions[selected[1]],
+                ))
+            elif not selected:
+                _set_detail_text("Select one version to see its settings, or select two versions to compare differences.")
+            else:
+                _set_detail_text("Select exactly one version for a summary, or exactly two versions for a differences-only comparison.")
+
+        def refresh_versions_list():
+            versions_listbox.delete(0, tk.END)
+            for version in saved_run_versions:
+                versions_listbox.insert(tk.END, _run_version_summary(version))
+            update_versions_detail()
+
+        def delete_selected_versions():
+            selected = list(versions_listbox.curselection())
+            if not selected:
+                return
+            for index in sorted(selected, reverse=True):
+                del saved_run_versions[index]
+            for index, version in enumerate(saved_run_versions, start=1):
+                version["label"] = f"Settings {index:02d}"
+                version["suffix"] = _run_version_suffix(index)
+            refresh_versions_list()
+            update_run_version_controls()
+            if not saved_run_versions:
+                versions_popup.destroy()
+            else:
+                update_versions_detail()
+
+        actions = ttk.Frame(container)
+        actions.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        actions.columnconfigure(0, weight=1)
+        ttk.Button(actions, text="Delete selected", command=delete_selected_versions).grid(row=0, column=1, sticky="e", padx=(8, 0))
+        ttk.Button(actions, text="Close", command=versions_popup.destroy).grid(row=0, column=2, sticky="e", padx=(8, 0))
+
+        versions_listbox.bind("<<ListboxSelect>>", update_versions_detail)
+        refresh_versions_list()
+        center_window(versions_popup)
+        versions_popup.wait_window()
+
     def validate_and_close():
-        nonlocal compiled_siop, compiled_sensor
+        nonlocal compiled_siop, compiled_sensor, active_run_versions
 
         validation_error = _get_form_validation_error()
         if validation_error is not None:
@@ -4610,6 +5290,31 @@ def gui():
             messagebox.showerror("Invalid sensor setup", str(exc))
             return
 
+        try:
+            current_version = _capture_current_run_version("Current settings", "")
+        except Exception as exc:
+            messagebox.showerror("Incomplete run settings", str(exc))
+            return
+
+        if saved_run_versions:
+            active_run_versions = copy.deepcopy(saved_run_versions)
+            if not _run_version_already_saved(current_version):
+                response = messagebox.askyesnocancel(
+                    "Unsaved current settings",
+                    "The current settings have not been saved as a run version.\n\n"
+                    "Yes: add the current settings to this batch run.\n"
+                    "No: discard the current settings and run only the saved versions.\n"
+                    "Cancel: return to the setup window.",
+                    parent=root,
+                )
+                if response is None:
+                    return
+                if response:
+                    current_version["label"] = f"Settings {len(active_run_versions) + 1:02d}"
+                    current_version["suffix"] = _run_version_suffix(len(active_run_versions) + 1)
+                    active_run_versions.append(current_version)
+        else:
+            active_run_versions = [current_version]
         root.destroy()
 
     actions = ttk.Frame(container)
@@ -4617,15 +5322,21 @@ def gui():
     actions.columnconfigure(0, weight=1)
     actions.columnconfigure(1, weight=0)
     actions.columnconfigure(2, weight=0)
+    actions.columnconfigure(3, weight=0)
+    actions.columnconfigure(4, weight=0)
     ttk.Button(actions, text="Cancel", command=on_close).grid(row=0, column=0, sticky="w")
     ttk.Button(actions, text="Load settings", command=load_previous_run_settings).grid(row=0, column=1, sticky="e", padx=(0, 8))
+    ttk.Button(actions, text="Save current settings", command=save_current_run_settings).grid(row=0, column=2, sticky="e", padx=(0, 8))
+    versions_button = ttk.Button(actions, text="Versions", command=open_run_versions_popup)
+    versions_button.grid(row=0, column=3, sticky="e", padx=(0, 8))
     run_button = ttk.Button(actions, text="Run", command=validate_and_close)
-    run_button.grid(row=0, column=2, sticky="e")
+    run_button.grid(row=0, column=4, sticky="e")
 
     update_substrate_ui()
     update_sensor_ui()
     update_crop_button_state()
     update_run_button_state()
+    update_run_version_controls()
     root.protocol("WM_DELETE_WINDOW", on_close)
 
     # ---- React when the window is dragged to a different monitor ----
@@ -4684,147 +5395,175 @@ def gui():
         except Exception:
             return None
 
+    if not active_run_versions:
+        active_run_versions = [_capture_current_run_version("Current settings", "")]
+
     file_list = input_files if input_files else ([input_image_var.get()] if input_image_var.get() else [])
     out_folder = output_folder_var.get()
-
-    pmin = [
-        float(chl_min_var.get()),
-        float(cdom_min_var.get()),
-        float(nap_min_var.get()),
-        float(depth_min_var.get()),
-        float(sub1_min_var.get()),
-        float(sub2_min_var.get()),
-        float(sub3_min_var.get()),
-    ]
-    pmax = [
-        float(chl_max_var.get()),
-        float(cdom_max_var.get()),
-        float(nap_max_var.get()),
-        float(depth_max_var.get()),
-        float(sub1_max_var.get()),
-        float(sub2_max_var.get()),
-        float(sub3_max_var.get()),
-    ]
 
     filename_im = os.path.basename(file_list[0]) if file_list else ""
     run_dir = os.path.join(out_folder, f"swampy_run_{year}{month}{day}_{hour}{minute}{second}")
     if not os.path.isdir(run_dir):
         os.makedirs(run_dir)
     input_base = os.path.splitext(filename_im)[0] if filename_im else f"run_{year}{month}{day}_{hour}{minute}{second}"
-    ofile = os.path.join(run_dir, f"swampy_{input_base}.nc")
+    multi_settings = len(active_run_versions) > 1 or bool(saved_run_versions)
 
-    file_iop = os.path.join(run_dir, "generated_siop.xml")
-    siop_config.write_siop_xml(file_iop, compiled_siop)
-    file_sensor = os.path.join(run_dir, "generated_sensor_filter.xml")
-    sensor_config.write_sensor_xml(file_sensor, compiled_sensor)
-    sensor_log_payload = sensor_config.build_log_payload(compiled_sensor)
+    def _build_input_dict_for_version(version, file_iop_path, file_sensor_path, initial_ofile, version_index):
+        version_crop = version.get("crop_selection")
+        version_deep_water = version.get("deep_water_selection")
+        version_false_deep = version.get("false_deep_correction_settings", {})
+        sensor_log_payload = version.get("sensor_log_payload", {})
+        payload = {
+            "image": file_list[0] if file_list else "",
+            "images": list(file_list),
+            "run_version_index": int(version_index),
+            "run_version_count": int(len(active_run_versions)),
+            "run_version_label": version.get("label", f"Settings {version_index:02d}"),
+            "run_version_suffix": version.get("suffix", ""),
+            "run_version_output_folder": os.path.dirname(initial_ofile),
+            "crop_enabled": bool(version_crop),
+            "crop_min_lon": float(version_crop["bbox"]["min_lon"]) if version_crop and version_crop.get("bbox") else "",
+            "crop_max_lon": float(version_crop["bbox"]["max_lon"]) if version_crop and version_crop.get("bbox") else "",
+            "crop_min_lat": float(version_crop["bbox"]["min_lat"]) if version_crop and version_crop.get("bbox") else "",
+            "crop_max_lat": float(version_crop["bbox"]["max_lat"]) if version_crop and version_crop.get("bbox") else "",
+            "crop_mask_path": str(version_crop.get("mask_path", "")) if version_crop else "",
+            "crop_source_image": str(version_crop.get("source_path", "")) if version_crop else "",
+            "deep_water_enabled": bool(version_deep_water),
+            "deep_water_use_sd_bounds": bool(version.get("deep_water_use_sd_bounds", False)),
+            "deep_water_polygons_json": json.dumps((version_deep_water or {}).get("polygons") or []),
+            "deep_water_source_image": str((version_deep_water or {}).get("source_path", "")) if version_deep_water else "",
+            "SIOPS": file_iop_path,
+            "sensor_filter": file_sensor_path,
+            "nedr_mode": "fixed",
+            "pmin": list(version.get("pmin") or []),
+            "pmax": list(version.get("pmax") or []),
+            "rrs_flag": bool(version.get("rrs_flag", True)),
+            "reflectance_input": bool(version.get("reflectance_input", False)),
+            "shallow": bool(version.get("shallow", False)),
+            "optimize_initial_guesses": bool(version.get("optimize_initial_guesses", False)),
+            "use_five_initial_guesses": bool(version.get("use_five_initial_guesses", False)),
+            "initial_guess_debug": bool(version.get("initial_guess_debug", False)),
+            "post_processing": bool(version.get("post_processing", False)),
+            "fully_relaxed": bool(version.get("fully_relaxed", False)),
+            "output_modeled_reflectance": bool(version.get("output_modeled_reflectance", False)),
+            "false_deep_correction_enabled": bool(version_false_deep.get("enabled", False)),
+            "false_deep_anchor_min_sdi": version_false_deep.get("anchor_min_sdi", ""),
+            "false_deep_anchor_max_depth_m": version_false_deep.get("anchor_max_depth_m", ""),
+            "false_deep_anchor_max_slope_percent": version_false_deep.get("anchor_max_slope_percent", ""),
+            "false_deep_anchor_max_error_f": version_false_deep.get("anchor_max_error_f", ""),
+            "false_deep_anchor_min_depth_margin_m": version_false_deep.get("anchor_min_depth_margin_m", ""),
+            "false_deep_suspect_max_sdi": version_false_deep.get("suspect_max_sdi", ""),
+            "false_deep_suspect_min_slope_percent": version_false_deep.get("suspect_min_slope_percent", ""),
+            "false_deep_suspect_growth_depth_fraction": version_false_deep.get("suspect_growth_depth_fraction", ""),
+            "false_deep_suspect_growth_sdi_margin": version_false_deep.get("suspect_growth_sdi_margin", ""),
+            "false_deep_search_radius_px": version_false_deep.get("search_radius_px", ""),
+            "false_deep_min_anchor_count": version_false_deep.get("min_anchor_count", ""),
+            "false_deep_correction_tolerance_m": version_false_deep.get("correction_tolerance_m", ""),
+            "false_deep_max_patch_size_px": version_false_deep.get("max_patch_size_px", ""),
+            "false_deep_treat_min_depth_as_barrier": version_false_deep.get("treat_min_depth_as_barrier", ""),
+            "false_deep_barrier_depth_margin_m": version_false_deep.get("barrier_depth_margin_m", ""),
+            "false_deep_barrier_min_sdi": version_false_deep.get("barrier_min_sdi", ""),
+            "false_deep_protect_true_deep_water": version_false_deep.get("protect_true_deep_water", ""),
+            "false_deep_true_deep_min_enclosure_fraction": version_false_deep.get("true_deep_min_enclosure_fraction", ""),
+            "false_deep_true_deep_border_min_enclosure_fraction": version_false_deep.get("true_deep_border_min_enclosure_fraction", ""),
+            "false_deep_true_deep_min_anchor_quadrants": version_false_deep.get("true_deep_min_anchor_quadrants", ""),
+            "false_deep_true_deep_border_min_anchor_quadrants": version_false_deep.get("true_deep_border_min_anchor_quadrants", ""),
+            "false_deep_true_deep_large_patch_size_px": version_false_deep.get("true_deep_large_patch_size_px", ""),
+            "false_deep_true_deep_smooth_slope_percent": version_false_deep.get("true_deep_smooth_slope_percent", ""),
+            "false_deep_debug_export": version_false_deep.get("debug_export", False),
+            "relaxed": bool(version.get("relaxed", False)),
+            "output_folder": out_folder,
+            "output_file": initial_ofile,
+            "output_format": version.get("output_format", output_format.get()),
+            "allow_split": bool(version.get("allow_split", False)),
+            "split_chunk_rows": version.get("split_chunk_rows", ""),
+            "siop_popup": version.get("siop_log_payload", {}),
+            "sensor_popup": sensor_log_payload,
+            "use_bathy": bool(version.get("use_bathy", False)),
+            "bathy_path": version.get("bathy_path", "") if version.get("use_bathy", False) else "",
+            "bathy_reference": version.get("bathy_reference", "depth"),
+            "bathy_correction_m": version.get("bathy_correction_m", 0.0),
+            "bathy_tolerance_m": version.get("bathy_tolerance_m", 0.0),
+        }
+        for mapping_key, mapping_value in sensor_log_payload.items():
+            if mapping_key.startswith("sensor_band_mapping_"):
+                payload[mapping_key] = mapping_value
+        return payload
 
-    input_dict = {
-        "image": file_list[0] if file_list else "",
-        "images": list(file_list),
-        "crop_enabled": bool(crop_selection),
-        "crop_min_lon": float(crop_selection["bbox"]["min_lon"]) if crop_selection and crop_selection.get("bbox") else "",
-        "crop_max_lon": float(crop_selection["bbox"]["max_lon"]) if crop_selection and crop_selection.get("bbox") else "",
-        "crop_min_lat": float(crop_selection["bbox"]["min_lat"]) if crop_selection and crop_selection.get("bbox") else "",
-        "crop_max_lat": float(crop_selection["bbox"]["max_lat"]) if crop_selection and crop_selection.get("bbox") else "",
-        "crop_mask_path": str(crop_selection.get("mask_path", "")) if crop_selection else "",
-        "crop_source_image": str(crop_selection.get("source_path", "")) if crop_selection else "",
-        "deep_water_enabled": bool(deep_water_selection),
-        "deep_water_use_sd_bounds": bool(deep_water_use_sd_var.get()),
-        "deep_water_polygons_json": json.dumps((deep_water_selection or {}).get("polygons") or []),
-        "deep_water_source_image": str((deep_water_selection or {}).get("source_path", "")) if deep_water_selection else "",
-        "SIOPS": file_iop,
-        "sensor_filter": file_sensor,
-        "nedr_mode": "fixed",
-        "pmin": pmin,
-        "pmax": pmax,
-        "rrs_flag": above_rrs_flag.get(),
-        "reflectance_input": reflectance_input_flag.get(),
-        "shallow": shallow_flag.get(),
-        "optimize_initial_guesses": optimize_initial_guesses_flag.get(),
-        "use_five_initial_guesses": five_initial_guess_testing_flag.get(),
-        "initial_guess_debug": initial_guess_debug_flag.get(),
-        "post_processing": bool(pp.get()),
-        "fully_relaxed": fully_relaxed_flag.get(),
-        "output_modeled_reflectance": output_modeled_reflectance_flag.get(),
-        "false_deep_correction_enabled": false_deep_correction_flag.get(),
-        "false_deep_anchor_min_sdi": false_deep_correction_config["anchor_min_sdi"],
-        "false_deep_anchor_max_depth_m": false_deep_correction_config["anchor_max_depth_m"],
-        "false_deep_anchor_max_slope_percent": false_deep_correction_config["anchor_max_slope_percent"],
-        "false_deep_anchor_max_error_f": false_deep_correction_config["anchor_max_error_f"],
-        "false_deep_anchor_min_depth_margin_m": false_deep_correction_config["anchor_min_depth_margin_m"],
-        "false_deep_suspect_max_sdi": false_deep_correction_config["suspect_max_sdi"],
-        "false_deep_suspect_min_slope_percent": false_deep_correction_config["suspect_min_slope_percent"],
-        "false_deep_suspect_min_depth_jump_m": false_deep_correction_config["suspect_min_depth_jump_m"],
-        "false_deep_search_radius_px": false_deep_correction_config["search_radius_px"],
-        "false_deep_min_anchor_count": false_deep_correction_config["min_anchor_count"],
-        "false_deep_correction_tolerance_m": false_deep_correction_config["correction_tolerance_m"],
-        "false_deep_max_patch_size_px": false_deep_correction_config["max_patch_size_px"],
-        "false_deep_treat_min_depth_as_barrier": false_deep_correction_config["treat_min_depth_as_barrier"],
-        "false_deep_barrier_depth_margin_m": false_deep_correction_config["barrier_depth_margin_m"],
-        "false_deep_barrier_min_sdi": false_deep_correction_config["barrier_min_sdi"],
-        "false_deep_debug_export": false_deep_correction_config["debug_export"],
-        "relaxed": relaxed.get(),
-        "output_folder": out_folder,
-        "output_file": ofile,
-        "output_format": output_format.get(),
-        "allow_split": allow_split.get(),
-        "split_chunk_rows": chunk_rows.get().strip(),
-        "siop_popup": siop_config.build_log_payload(compiled_siop, template_config, spectral_library),
-        "sensor_popup": sensor_log_payload,
-    }
-    for mapping_key, mapping_value in sensor_log_payload.items():
-        if mapping_key.startswith("sensor_band_mapping_"):
-            input_dict[mapping_key] = mapping_value
+    run_versions_payloads = []
+    for version_index, version in enumerate(active_run_versions, start=1):
+        suffix = version.get("suffix", "")
+        if not multi_settings:
+            suffix = ""
+        version_output_dir = run_dir
+        if multi_settings:
+            version_folder = str(suffix or _run_version_suffix(version_index)).lstrip("_")
+            if not version_folder:
+                version_folder = f"settings{version_index:02d}"
+            version_output_dir = os.path.join(run_dir, version_folder)
+            os.makedirs(version_output_dir, exist_ok=True)
+        file_iop = os.path.join(version_output_dir, f"generated_siop{suffix}.xml")
+        siop_config.write_siop_xml(file_iop, version["compiled_siop"])
+        file_sensor = os.path.join(version_output_dir, f"generated_sensor_filter{suffix}.xml")
+        sensor_config.write_sensor_xml(file_sensor, version["compiled_sensor"])
+        ofile = os.path.join(version_output_dir, f"swampy_{input_base}{suffix}.nc")
+        xml_file = os.path.join(version_output_dir, f"log_{input_base}{suffix}.xml")
+        version_payload = {
+            "label": version.get("label", f"Settings {version_index:02d}"),
+            "suffix": suffix,
+            "index": int(version_index),
+            "count": int(len(active_run_versions)),
+            "output_dir": version_output_dir,
+            "siop_xml_path": file_iop,
+            "file_sensor": file_sensor,
+            "ofile": ofile,
+            "xml_file": xml_file,
+            "pmin": list(version.get("pmin") or []),
+            "pmax": list(version.get("pmax") or []),
+            "above_rrs_flag": bool(version.get("rrs_flag", True)),
+            "reflectance_input_flag": bool(version.get("reflectance_input", False)),
+            "relaxed": bool(version.get("relaxed", False)),
+            "shallow_flag": bool(version.get("shallow", False)),
+            "optimize_initial_guesses": bool(version.get("optimize_initial_guesses", False)),
+            "use_five_initial_guesses": bool(version.get("use_five_initial_guesses", False)),
+            "initial_guess_debug": bool(version.get("initial_guess_debug", False)),
+            "fully_relaxed": bool(version.get("fully_relaxed", False)),
+            "output_modeled_reflectance": bool(version.get("output_modeled_reflectance", False)),
+            "false_deep_correction_settings": copy.deepcopy(version.get("false_deep_correction_settings", {})),
+            "xml_dict": _build_input_dict_for_version(version, file_iop, file_sensor, ofile, version_index),
+            "output_format": version.get("output_format", output_format.get()),
+            "bathy_path": version.get("bathy_path", "") if version.get("use_bathy", False) else "",
+            "post_processing": bool(version.get("post_processing", False)),
+            "allow_split": bool(version.get("allow_split", False)),
+            "split_chunk_rows": version.get("split_chunk_rows", ""),
+        }
+        run_versions_payloads.append(version_payload)
 
-    bathy_path = ""
-    if bathy_mode.get() == "input":
-        bathy_path = bathy_path_var.get() or _resolve_bundled_resource(cwd, os.path.join(cwd, "Data", "Bathy", "E4_2024.tif"))
-        input_dict["use_bathy"] = True
-        input_dict["bathy_path"] = bathy_path
-        input_dict["bathy_reference"] = "hydrographic_zero" if user_defined_var.get() else "depth"
-        try:
-            input_dict["bathy_correction_m"] = float(bathy_correction.get())
-        except Exception:
-            input_dict["bathy_correction_m"] = 0.0
-        try:
-            input_dict["bathy_tolerance_m"] = float(bathy_tolerance.get())
-        except Exception:
-            input_dict["bathy_tolerance_m"] = 0.0
-    else:
-        input_dict["use_bathy"] = False
-        input_dict["bathy_path"] = ""
-        input_dict["bathy_reference"] = "depth"
-        input_dict["bathy_correction_m"] = 0.0
-        input_dict["bathy_tolerance_m"] = 0.0
-
-    xml_file = os.path.join(run_dir, f"log_{input_base}.xml")
+    primary_version = run_versions_payloads[0]
 
     return (
         file_list,
-        ofile,
-        file_iop,
-        file_sensor,
-        above_rrs_flag.get(),
-        reflectance_input_flag.get(),
-        relaxed.get(),
-        shallow_flag.get(),
-        optimize_initial_guesses_flag.get(),
-        five_initial_guess_testing_flag.get(),
-        initial_guess_debug_flag.get(),
-        fully_relaxed_flag.get(),
-        output_modeled_reflectance_flag.get(),
-        {
-            "enabled": false_deep_correction_flag.get(),
-            **false_deep_correction_config,
-        },
-        pmin,
-        pmax,
-        xml_file,
-        input_dict,
-        output_format.get(),
-        bathy_path,
-        bool(pp.get()),
-        allow_split.get(),
-        chunk_rows.get().strip(),
+        primary_version["ofile"],
+        primary_version["siop_xml_path"],
+        primary_version["file_sensor"],
+        primary_version["above_rrs_flag"],
+        primary_version["reflectance_input_flag"],
+        primary_version["relaxed"],
+        primary_version["shallow_flag"],
+        primary_version["optimize_initial_guesses"],
+        primary_version["use_five_initial_guesses"],
+        primary_version["initial_guess_debug"],
+        primary_version["fully_relaxed"],
+        primary_version["output_modeled_reflectance"],
+        primary_version["false_deep_correction_settings"],
+        primary_version["pmin"],
+        primary_version["pmax"],
+        primary_version["xml_file"],
+        primary_version["xml_dict"],
+        primary_version["output_format"],
+        primary_version["bathy_path"],
+        primary_version["post_processing"],
+        primary_version["allow_split"],
+        primary_version["split_chunk_rows"],
+        run_versions_payloads,
     )
