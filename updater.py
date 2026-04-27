@@ -14,6 +14,7 @@ Usage (called from launch_swampy.py):
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -87,28 +88,82 @@ def _fetch_latest_release():
 def _find_conda():
     """
     Return a path to a usable conda (or conda.bat) executable, or None.
-    Checks CONDA_EXE env var first, then well-known Windows / Unix locations.
+    Checks activated conda variables, shell PATH, the running Python location,
+    and well-known Windows / Unix install locations.
     """
-    conda_exe = os.environ.get("CONDA_EXE")
-    if conda_exe and os.path.isfile(conda_exe):
-        return conda_exe
+    seen = set()
+    candidates = []
+
+    def _add(path):
+        if not path:
+            return
+        path = os.path.abspath(os.path.expanduser(os.path.expandvars(path)))
+        key = os.path.normcase(path)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(path)
+
+    def _add_root(root):
+        if not root:
+            return
+        root = os.path.abspath(os.path.expanduser(os.path.expandvars(root)))
+        for rel in (
+            ("condabin", "conda.bat"),
+            ("condabin", "conda"),
+            ("Library", "bin", "conda.bat"),
+            ("Library", "bin", "conda.exe"),
+            ("Scripts", "conda.exe"),
+            ("Scripts", "conda.bat"),
+            ("bin", "conda"),
+        ):
+            _add(os.path.join(root, *rel))
+
+    def _add_prefix_and_base(prefix):
+        if not prefix:
+            return
+        prefix = os.path.abspath(os.path.expanduser(os.path.expandvars(prefix)))
+        _add_root(prefix)
+        parent = os.path.dirname(prefix)
+        if os.path.basename(parent).lower() == "envs":
+            _add_root(os.path.dirname(parent))
+
+    for var in ("CONDA_EXE", "_CONDA_EXE", "CONDA_BAT"):
+        _add(os.environ.get(var))
+
+    for name in ("conda", "conda.bat", "conda.exe"):
+        _add(shutil.which(name))
+
+    for var in (
+        "CONDA_ROOT",
+        "MAMBA_ROOT_PREFIX",
+        "CONDA_PREFIX",
+        "CONDA_PREFIX_1",
+        "CONDA_PREFIX_2",
+        "CONDA_PREFIX_3",
+    ):
+        _add_prefix_and_base(os.environ.get(var))
+
+    if sys.executable:
+        _add_prefix_and_base(os.path.dirname(sys.executable))
 
     home = os.path.expanduser("~")
-    candidates = [
-        # Windows – miniconda / anaconda in home dir
-        os.path.join(home, "miniconda3", "condabin", "conda.bat"),
-        os.path.join(home, "anaconda3", "condabin", "conda.bat"),
-        os.path.join(home, "AppData", "Local", "miniconda3", "condabin", "conda.bat"),
-        os.path.join(home, "AppData", "Local", "anaconda3", "condabin", "conda.bat"),
-        # Windows – system-wide
-        r"C:\ProgramData\miniconda3\condabin\conda.bat",
-        r"C:\ProgramData\anaconda3\condabin\conda.bat",
-        # Linux / macOS
-        os.path.join(home, "miniconda3", "bin", "conda"),
-        os.path.join(home, "anaconda3", "bin", "conda"),
-        "/opt/conda/bin/conda",
-        "/usr/local/bin/conda",
+    install_names = (
+        "miniconda3", "Miniconda3",
+        "anaconda3", "Anaconda3",
+        "miniforge3", "Miniforge3",
+        "mambaforge", "Mambaforge",
+    )
+    install_parents = [
+        home,
+        os.environ.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local")),
+        os.environ.get("ProgramData", r"C:\ProgramData"),
+        "/opt",
+        "/usr/local",
     ]
+    for parent in install_parents:
+        for name in install_names:
+            _add_root(os.path.join(parent, name))
+
     for path in candidates:
         if os.path.isfile(path):
             return path
@@ -155,6 +210,15 @@ def _run_update_thread(tag, log_cb, done_cb):
     def _work():
         try:
             old_env_hash = _md5(_ENV_YML)
+            conda = _find_conda()
+            if conda is None:
+                raise RuntimeError(
+                    "conda not found before applying the update. Start Swampy from "
+                    "Anaconda Prompt / Conda PowerShell, or make sure conda is installed. "
+                    f"Then run conda env update -n {CONDA_ENV_NAME} -f environment.yml --prune "
+                    "manually if needed."
+                )
+            log_cb(f"Using conda executable: {conda}")
 
             log_cb("Fetching tags from origin…")
             _cmd(["git", "fetch", "--tags", "origin"])
@@ -172,20 +236,12 @@ def _run_update_thread(tag, log_cb, done_cb):
             if not os.path.isfile(_ENV_YML):
                 raise RuntimeError("environment.yml not found; cannot update conda environment.")
 
-            conda = _find_conda()
-            if conda is None:
-                raise RuntimeError(
-                    "conda not found; run "
-                    f"conda env update -n {CONDA_ENV_NAME} -f environment.yml --prune "
-                    "manually, then restart Swampy."
-                )
-
             _cmd(
                 [conda, "env", "update",
                  "-n", CONDA_ENV_NAME,
                  "-f", _ENV_YML,
                  "--prune"],
-                shell=(conda.endswith(".bat")),
+                shell=(conda.lower().endswith((".bat", ".cmd"))),
             )
 
             log_cb("Update complete.")

@@ -24,7 +24,14 @@
       "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" diff b085a0e HEAD -- app/gui_swampy.py app/launch_swampy.py app/image_io.py app/leaflet_crop_window.py)",
       "Bash(git -C \"c:/Users/Simon/Nextcloud/GIT/Swampy\" log --format=\"%s%n%b\" b085a0e..HEAD)",
       "Bash(grep -v \"^$\")",
-      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -c ':*)"
+      "Bash(/c/Users/Simon/miniconda3/envs/SwampySim/python.exe -c ':*)",
+      "Bash(python -m pytest app/tests/test_false_deep_correction.py -v)",
+      "PowerShell(python -m pytest app/tests/test_false_deep_correction.py -v 2>&1)",
+      "PowerShell(Get-Command python3, py, pytest -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command py -ErrorAction SilentlyContinue)",
+      "PowerShell(py -m pytest app/tests/test_false_deep_correction.py -v 2>&1)",
+      "PowerShell(conda run -n SwampySim pip install pytest -q 2>&1)",
+      "PowerShell(conda run -n SwampySim python -m pytest app/tests/test_false_deep_correction.py -v 2>&1)"
     ]
   }
 }

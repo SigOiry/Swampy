@@ -1337,31 +1337,10 @@ def gui():
     siop_summary_var = StringVar()
     sensor_summary_var = StringVar()
     sub3_saved_bounds = {"min": "0", "max": "1"}
-    false_deep_correction_config = {
-        "anchor_min_sdi": 1.5,
-        "anchor_max_depth_m": 8.0,
-        "anchor_max_slope_percent": 10.0,
-        "anchor_max_error_f": 0.003,
-        "anchor_min_depth_margin_m": 0.5,
-        "suspect_max_sdi": 1.0,
-        "suspect_min_slope_percent": 10.0,
-        "suspect_growth_depth_fraction": 0.15,
-        "suspect_growth_sdi_margin": 0.20,
-        "search_radius_px": 12,
-        "min_anchor_count": 4,
-        "correction_tolerance_m": 1.5,
-        "max_patch_size_px": 64,
-        "treat_min_depth_as_barrier": True,
-        "barrier_depth_margin_m": 0.25,
-        "barrier_min_sdi": 3.0,
-        "protect_true_deep_water": True,
-        "true_deep_min_enclosure_fraction": 0.25,
-        "true_deep_border_min_enclosure_fraction": 0.40,
-        "true_deep_min_anchor_quadrants": 2,
-        "true_deep_border_min_anchor_quadrants": 3,
-        "true_deep_large_patch_size_px": 128,
-        "true_deep_smooth_slope_percent": 5.0,
-        "debug_export": False,
+    anomaly_search_settings = {
+        "export_local_moran_raster": False,
+        "export_suspicious_binary_raster": False,
+        "export_interpolated_rasters": False,
     }
 
     def update_substrate_ui():
@@ -1456,6 +1435,10 @@ def gui():
     versions_button = None
     saved_run_versions = []
     active_run_versions = []
+    run_button_enabled_bg = "#b9f6ca"
+    run_button_disabled_bg = "#d9eadf"
+    run_button_active_bg = "#8ee8a5"
+    run_button_fg = "#0f3d22"
 
     def _set_widget_enabled(widget, enabled):
         try:
@@ -2025,7 +2008,18 @@ def gui():
     def update_run_button_state(*_args):
         if run_button is None:
             return
-        _set_widget_enabled(run_button, _get_form_validation_error() is None)
+        enabled = _get_form_validation_error() is None
+        _set_widget_enabled(run_button, enabled)
+        try:
+            run_button.configure(
+                bg=run_button_enabled_bg if enabled else run_button_disabled_bg,
+                activebackground=run_button_active_bg if enabled else run_button_disabled_bg,
+                fg=run_button_fg if enabled else "#6f7f73",
+                activeforeground=run_button_fg,
+                cursor="hand2" if enabled else "arrow",
+            )
+        except Exception:
+            pass
 
     def open_feature_popup(title, description, settings_builder=None, apply_callback=None,
                            geometry="760x300", minsize=(700, 240), max_height_ratio=0.6):
@@ -2118,194 +2112,44 @@ def gui():
             minsize=(700, 220),
         )
 
-    def open_false_deep_correction_popup():
-        debug_export_var = BooleanVar(value=bool(false_deep_correction_config["debug_export"]))
-        protect_true_deep_var = BooleanVar(value=bool(false_deep_correction_config["protect_true_deep_water"]))
-        min_depth_barrier_var = BooleanVar(value=bool(false_deep_correction_config["treat_min_depth_as_barrier"]))
-        available = bathy_mode.get() == "estimate"
-        numeric_fields = [
-            ("Anchor min SDI", "anchor_min_sdi"),
-            ("Anchor max depth (m)", "anchor_max_depth_m"),
-            ("Anchor max slope (%)", "anchor_max_slope_percent"),
-            ("Anchor max error F", "anchor_max_error_f"),
-            ("Anchor depth margin (m)", "anchor_min_depth_margin_m"),
-            ("Min anchor count", "min_anchor_count"),
-            ("Suspicious max SDI", "suspect_max_sdi"),
-            ("Seed min slope (%)", "suspect_min_slope_percent"),
-            ("Growth depth fraction", "suspect_growth_depth_fraction"),
-            ("Growth SDI margin", "suspect_growth_sdi_margin"),
-            ("Interpolation radius (px)", "search_radius_px"),
-            ("Max patch size (px)", "max_patch_size_px"),
-            ("Barrier depth margin (m)", "barrier_depth_margin_m"),
-            ("Barrier min SDI", "barrier_min_sdi"),
-            ("Enclosure fraction", "true_deep_min_enclosure_fraction"),
-            ("Border enclosure", "true_deep_border_min_enclosure_fraction"),
-            ("Anchor quadrants", "true_deep_min_anchor_quadrants"),
-            ("Border quadrants", "true_deep_border_min_anchor_quadrants"),
-            ("Large patch size (px)", "true_deep_large_patch_size_px"),
-            ("Smooth true-deep slope (%)", "true_deep_smooth_slope_percent"),
-        ]
-        int_keys = {
-            "search_radius_px",
-            "min_anchor_count",
-            "max_patch_size_px",
-            "true_deep_min_anchor_quadrants",
-            "true_deep_border_min_anchor_quadrants",
-            "true_deep_large_patch_size_px",
-        }
-        fraction_keys = {
-            "suspect_growth_depth_fraction",
-            "true_deep_min_enclosure_fraction",
-            "true_deep_border_min_enclosure_fraction",
-        }
-
-        def _format_config_value(value):
-            if isinstance(value, int) and not isinstance(value, bool):
-                return str(value)
-            try:
-                return f"{float(value):g}"
-            except (TypeError, ValueError):
-                return str(value)
-
-        numeric_vars = {
-            key: StringVar(value=_format_config_value(false_deep_correction_config[key]))
-            for _, key in numeric_fields
-        }
-        status_var = StringVar(value="")
-        entry_widgets = []
+    def open_anomaly_search_popup():
+        export_local_moran_var = BooleanVar(value=bool(anomaly_search_settings["export_local_moran_raster"]))
+        export_suspicious_binary_var = BooleanVar(value=bool(anomaly_search_settings["export_suspicious_binary_raster"]))
+        export_interpolated_var = BooleanVar(value=bool(anomaly_search_settings["export_interpolated_rasters"]))
 
         def build_settings(settings_frame):
-            for col in range(4):
-                settings_frame.columnconfigure(col, weight=1 if col in (1, 3) else 0)
-            ttk.Label(
+            settings_frame.columnconfigure(0, weight=1)
+            ttk.Checkbutton(
                 settings_frame,
-                text=(
-                    "This feature is only applied when bathymetry is estimated by the workflow."
-                    if available else
-                    "This feature is unavailable while input bathymetry is selected. Switch bathymetry mode to estimate to enable it."
-                ),
-                wraplength=620,
-                justify="left",
-            ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
-
-            def add_section(row, text):
-                ttk.Label(settings_frame, text=text).grid(
-                    row=row,
-                    column=0,
-                    columnspan=4,
-                    sticky="w",
-                    pady=(8, 2),
-                )
-
-            def add_numeric(row, pair_index, label, key):
-                label_col = 0 if pair_index == 0 else 2
-                entry_col = label_col + 1
-                ttk.Label(settings_frame, text=label).grid(
-                    row=row,
-                    column=label_col,
-                    sticky="w",
-                    padx=(0 if pair_index == 0 else 16, 6),
-                    pady=2,
-                )
-                entry = ttk.Entry(settings_frame, textvariable=numeric_vars[key], width=12, justify="right")
-                entry.grid(row=row, column=entry_col, sticky="ew", pady=2)
-                entry_widgets.append(entry)
-                _set_widget_enabled(entry, available)
-
-            row = 1
-            add_section(row, "Confident pixel map")
-            row += 1
-            for index, item in enumerate(numeric_fields[:6]):
-                add_numeric(row + index // 2, index % 2, item[0], item[1])
-            row += 3
-
-            add_section(row, "Suspicious seed and growth")
-            row += 1
-            for index, item in enumerate(numeric_fields[6:12]):
-                add_numeric(row + index // 2, index % 2, item[0], item[1])
-            row += 3
-
-            add_section(row, "True-deep safeguards")
-            row += 1
-            protect_check = ttk.Checkbutton(
+                text="Export edge / plateau debug rasters",
+                variable=export_local_moran_var,
+            ).grid(row=0, column=0, sticky="w", pady=2)
+            ttk.Checkbutton(
                 settings_frame,
-                text="Protect true deep water",
-                variable=protect_true_deep_var,
-            )
-            protect_check.grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
-            barrier_check = ttk.Checkbutton(
+                text="Export suspicious/not-suspicious raster",
+                variable=export_suspicious_binary_var,
+            ).grid(row=1, column=0, sticky="w", pady=2)
+            ttk.Checkbutton(
                 settings_frame,
-                text="Treat minimum depth as barrier",
-                variable=min_depth_barrier_var,
-            )
-            barrier_check.grid(row=row, column=2, columnspan=2, sticky="w", padx=(16, 0), pady=2)
-            _set_widget_enabled(protect_check, available)
-            _set_widget_enabled(barrier_check, available)
-            row += 1
-            for index, item in enumerate(numeric_fields[12:]):
-                add_numeric(row + index // 2, index % 2, item[0], item[1])
-            row += 4
+                text="Export interpolated depth / CHL / CDOM / NAP rasters",
+                variable=export_interpolated_var,
+            ).grid(row=2, column=0, sticky="w", pady=2)
 
-            debug_check = ttk.Checkbutton(
-                settings_frame,
-                text="Export debug rasters",
-                variable=debug_export_var,
-            )
-            debug_check.grid(row=row, column=0, columnspan=2, sticky="w", pady=(8, 0))
-            _set_widget_enabled(debug_check, available)
-            ttk.Label(settings_frame, textvariable=status_var, foreground="red").grid(
-                row=row + 1,
-                column=0,
-                columnspan=4,
-                sticky="w",
-                pady=(6, 0),
-            )
-
-        def apply_false_deep_correction_changes():
-            parsed_values = {}
-            for label, key in numeric_fields:
-                raw_value = numeric_vars[key].get().strip()
-                try:
-                    if key in int_keys:
-                        parsed = int(float(raw_value))
-                    else:
-                        parsed = float(raw_value)
-                except (TypeError, ValueError):
-                    status_var.set(f"{label} must be numeric.")
-                    return False
-
-                if key in int_keys and parsed <= 0:
-                    status_var.set(f"{label} must be greater than zero.")
-                    return False
-                if key not in int_keys and parsed < 0.0:
-                    status_var.set(f"{label} must be zero or greater.")
-                    return False
-                if key in fraction_keys and parsed > 1.0:
-                    status_var.set(f"{label} must be between 0 and 1.")
-                    return False
-                if key in {"true_deep_min_anchor_quadrants", "true_deep_border_min_anchor_quadrants"} and parsed > 4:
-                    status_var.set(f"{label} must be between 1 and 4.")
-                    return False
-                parsed_values[key] = parsed
-
-            false_deep_correction_config.update(parsed_values)
-            false_deep_correction_config["protect_true_deep_water"] = bool(protect_true_deep_var.get())
-            false_deep_correction_config["treat_min_depth_as_barrier"] = bool(min_depth_barrier_var.get())
-            false_deep_correction_config["debug_export"] = bool(debug_export_var.get())
+        def apply_anomaly_search_changes():
+            anomaly_search_settings["export_local_moran_raster"] = bool(export_local_moran_var.get())
+            anomaly_search_settings["export_suspicious_binary_raster"] = bool(export_suspicious_binary_var.get())
+            anomaly_search_settings["export_interpolated_rasters"] = bool(export_interpolated_var.get())
             return True
 
         open_feature_popup(
             "False-deep bathymetry correction",
-            "This optional second pass is tunable.\n\n"
-            "1. It marks confident pixels using fit quality, depth, SDI, and local continuity.\n"
-            "2. It seeds suspicious low-SDI pixels on the deeper side of steep depth slopes.\n"
-            "3. It rebuilds local starting values from surrounding confident pixels.\n"
-            "4. It re-optimises suspicious pixels with tight local bounds so adjacent depths stay physically coherent.",
+            "This stage detects suspicious false-deep areas as deeper / lower-SDI plateaus that begin at sharp boundaries.\n\n"
+            "It looks for places where depth increases suddenly and SDI drops suddenly, then grows inward over connected pixels that remain deep and low in SDI. Suspicious pixels are then corrected by linearly interpolating depth, CHL, CDOM, and NAP from non-suspicious pixels and re-optimising only the substrate fractions.",
             settings_builder=build_settings,
-            apply_callback=apply_false_deep_correction_changes,
-            geometry="980x760",
-            minsize=(900, 620),
-            max_height_ratio=0.82,
+            apply_callback=apply_anomaly_search_changes,
+            geometry="760x260",
+            minsize=(700, 220),
+            max_height_ratio=0.4,
         )
 
     def open_initial_guess_popup():
@@ -4214,7 +4058,7 @@ def gui():
     above_rrs_flag = BooleanVar(value=True)
     reflectance_input_flag = BooleanVar(value=False)
     shallow_flag = BooleanVar(value=False)
-    false_deep_correction_flag = BooleanVar(value=False)
+    anomaly_search_flag = BooleanVar(value=False)
     optimize_initial_guesses_flag = BooleanVar(value=False)
     five_initial_guess_testing_flag = BooleanVar(value=False)
     initial_guess_debug_flag = BooleanVar(value=False)
@@ -4267,11 +4111,11 @@ def gui():
     post_frame.grid(row=0, column=2, sticky="nsew", padx=(4, 0), pady=2)
     post_frame.columnconfigure(1, weight=1)
     add_option_row(post_frame, 0, "Shallow waters", shallow_flag, open_shallow_water_popup)
-    false_deep_info_button, false_deep_checkbutton = add_option_row(
+    anomaly_search_info_button, anomaly_search_checkbutton = add_option_row(
         post_frame, 1,
         "Correct steep false-deep bathymetry",
-        false_deep_correction_flag,
-        open_false_deep_correction_popup,
+        anomaly_search_flag,
+        open_anomaly_search_popup,
     )
 
     def update_initial_guess_controls(*_args):
@@ -4286,20 +4130,12 @@ def gui():
         if not relaxed.get():
             fully_relaxed_flag.set(False)
 
-    def update_false_deep_correction_controls(*_args):
-        available = bathy_mode.get() == "estimate"
-        if not available and false_deep_correction_flag.get():
-            false_deep_correction_flag.set(False)
-        _set_widget_enabled(false_deep_checkbutton, available)
-
     optimize_initial_guesses_flag.trace_add("write", update_initial_guess_controls)
     allow_split.trace_add("write", update_split_controls)
     relaxed.trace_add("write", update_relaxed_controls)
-    false_deep_correction_flag.trace_add("write", update_false_deep_correction_controls)
     update_initial_guess_controls()
     update_split_controls()
     update_relaxed_controls()
-    update_false_deep_correction_controls()
 
     # ---- Input Bathymetry section (params_tab row 2) ----
     bathy_frame = ttk.Labelframe(params_tab, text="Input Bathymetry")
@@ -4533,9 +4369,7 @@ def gui():
                 depth_max_entry.configure(state="normal")
 
     bathy_mode.trace_add("write", update_depth_state)
-    bathy_mode.trace_add("write", update_false_deep_correction_controls)
     update_depth_state()
-    update_false_deep_correction_controls()
     _update_deep_water_parameter_controls()
 
     def load_previous_run_settings():
@@ -4761,7 +4595,7 @@ def gui():
         pp.set(_parse_bool_text(_xml_find_text(xml_root, "post_processing", _xml_find_text(xml_root, "pproc")), pp.get()))
         fully_relaxed_flag.set(_parse_bool_text(_xml_find_text(xml_root, "fully_relaxed"), fully_relaxed_flag.get()))
         output_modeled_reflectance_flag.set(_parse_bool_text(_xml_find_text(xml_root, "output_modeled_reflectance"), output_modeled_reflectance_flag.get()))
-        false_deep_correction_flag.set(_parse_bool_text(_xml_find_text(xml_root, "false_deep_correction_enabled"), false_deep_correction_flag.get()))
+        anomaly_search_flag.set(_parse_bool_text(_xml_find_text(xml_root, "anomaly_search_enabled"), anomaly_search_flag.get()))
         relaxed.set(_parse_bool_text(_xml_find_text(xml_root, "relaxed"), relaxed.get()))
         allow_split.set(_parse_bool_text(_xml_find_text(xml_root, "allow_split"), allow_split.get()))
         loaded_chunk_rows = _xml_find_text(xml_root, "split_chunk_rows", chunk_rows.get())
@@ -4784,24 +4618,18 @@ def gui():
             sub3_saved_bounds["max"] = loaded_pmax[6]
             sub3_min_var.set(loaded_pmin[6]); sub3_max_var.set(loaded_pmax[6])
 
-        loaded_false_deep_values = {}
-        for config_key, current_value in false_deep_correction_config.items():
-            loaded_text = _xml_find_text(xml_root, f"false_deep_{config_key}")
-            if loaded_text is None:
-                continue
-            if isinstance(current_value, bool):
-                loaded_false_deep_values[config_key] = _parse_bool_text(loaded_text, current_value)
-            elif isinstance(current_value, int) and not isinstance(current_value, bool):
-                try:
-                    loaded_false_deep_values[config_key] = int(float(loaded_text))
-                except (TypeError, ValueError):
-                    loaded_false_deep_values[config_key] = current_value
-            else:
-                try:
-                    loaded_false_deep_values[config_key] = float(loaded_text)
-                except (TypeError, ValueError):
-                    loaded_false_deep_values[config_key] = current_value
-        false_deep_correction_config.update(loaded_false_deep_values)
+        anomaly_search_settings["export_local_moran_raster"] = _parse_bool_text(
+            _xml_find_text(xml_root, "anomaly_search_export_local_moran_raster"),
+            anomaly_search_settings["export_local_moran_raster"],
+        )
+        anomaly_search_settings["export_suspicious_binary_raster"] = _parse_bool_text(
+            _xml_find_text(xml_root, "anomaly_search_export_suspicious_binary_raster"),
+            anomaly_search_settings["export_suspicious_binary_raster"],
+        )
+        anomaly_search_settings["export_interpolated_rasters"] = _parse_bool_text(
+            _xml_find_text(xml_root, "anomaly_search_export_interpolated_rasters"),
+            anomaly_search_settings["export_interpolated_rasters"],
+        )
 
         use_bathy = _parse_bool_text(_xml_find_text(xml_root, "use_bathy"), False)
         default_emodnet_path = _resolve_bundled_resource(cwd, os.path.join(cwd, "Data", "Bathy", "E4_2024.tif"))
@@ -4834,7 +4662,6 @@ def gui():
         update_substrate_ui()
         update_sensor_ui()
         update_initial_guess_controls()
-        update_false_deep_correction_controls()
 
         if show_overwrite_warning:
             messagebox.showwarning(
@@ -4898,8 +4725,8 @@ def gui():
         pmax_values = version.get("pmax") or ["", "", "", ""]
         depth_text = f"Depth {pmin_values[3]:g}-{pmax_values[3]:g} m" if len(pmin_values) > 3 and len(pmax_values) > 3 else "Depth bounds unavailable"
         enabled_features = []
-        if version.get("false_deep_correction_settings", {}).get("enabled"):
-            enabled_features.append("false-deep")
+        if version.get("anomaly_search_settings", {}).get("enabled"):
+            enabled_features.append("anomaly search")
         if version.get("optimize_initial_guesses"):
             enabled_features.append("initial guesses")
         if version.get("relaxed"):
@@ -4945,9 +4772,9 @@ def gui():
             "initial_guess_debug": bool(initial_guess_debug_flag.get()),
             "fully_relaxed": bool(fully_relaxed_flag.get()),
             "output_modeled_reflectance": bool(output_modeled_reflectance_flag.get()),
-            "false_deep_correction_settings": {
-                "enabled": bool(false_deep_correction_flag.get()),
-                **copy.deepcopy(false_deep_correction_config),
+            "anomaly_search_settings": {
+                "enabled": bool(anomaly_search_flag.get()),
+                **copy.deepcopy(anomaly_search_settings),
             },
             "post_processing": bool(pp.get()),
             "output_format": output_format.get(),
@@ -4999,7 +4826,7 @@ def gui():
             "initial_guess_debug",
             "fully_relaxed",
             "output_modeled_reflectance",
-            "false_deep_correction_settings",
+            "anomaly_search_settings",
             "post_processing",
             "output_format",
             "allow_split",
@@ -5108,7 +4935,7 @@ def gui():
 
             siop_payload = version.get("siop_log_payload") or {}
             sensor_payload = version.get("sensor_log_payload") or {}
-            false_deep = version.get("false_deep_correction_settings") or {}
+            anomaly_search = version.get("anomaly_search_settings") or {}
             pmin_values = list(version.get("pmin") or [])
             pmax_values = list(version.get("pmax") or [])
 
@@ -5166,9 +4993,9 @@ def gui():
             add("Bathymetry", "Water level correction (m)", version.get("bathy_correction_m", ""))
             add("Bathymetry", "Depth bounds around bathy (m)", version.get("bathy_tolerance_m", ""))
 
-            for key, value in false_deep.items():
+            for key, value in anomaly_search.items():
                 label = key.replace("_", " ")
-                add("False-deep correction", label, value)
+                add("Anomaly search", label, value)
 
             return rows
 
@@ -5329,7 +5156,23 @@ def gui():
     ttk.Button(actions, text="Save current settings", command=save_current_run_settings).grid(row=0, column=2, sticky="e", padx=(0, 8))
     versions_button = ttk.Button(actions, text="Versions", command=open_run_versions_popup)
     versions_button.grid(row=0, column=3, sticky="e", padx=(0, 8))
-    run_button = ttk.Button(actions, text="Run", command=validate_and_close)
+    run_button = tk.Button(
+        actions,
+        text="Run",
+        command=validate_and_close,
+        width=18,
+        padx=18,
+        pady=8,
+        bg=run_button_enabled_bg,
+        activebackground=run_button_active_bg,
+        fg=run_button_fg,
+        activeforeground=run_button_fg,
+        disabledforeground="#6f7f73",
+        font=("Segoe UI", 12, "bold"),
+        relief="raised",
+        bd=1,
+        cursor="hand2",
+    )
     run_button.grid(row=0, column=4, sticky="e")
 
     update_substrate_ui()
@@ -5411,7 +5254,7 @@ def gui():
     def _build_input_dict_for_version(version, file_iop_path, file_sensor_path, initial_ofile, version_index):
         version_crop = version.get("crop_selection")
         version_deep_water = version.get("deep_water_selection")
-        version_false_deep = version.get("false_deep_correction_settings", {})
+        version_anomaly_search = version.get("anomaly_search_settings", {})
         sensor_log_payload = version.get("sensor_log_payload", {})
         payload = {
             "image": file_list[0] if file_list else "",
@@ -5446,31 +5289,10 @@ def gui():
             "post_processing": bool(version.get("post_processing", False)),
             "fully_relaxed": bool(version.get("fully_relaxed", False)),
             "output_modeled_reflectance": bool(version.get("output_modeled_reflectance", False)),
-            "false_deep_correction_enabled": bool(version_false_deep.get("enabled", False)),
-            "false_deep_anchor_min_sdi": version_false_deep.get("anchor_min_sdi", ""),
-            "false_deep_anchor_max_depth_m": version_false_deep.get("anchor_max_depth_m", ""),
-            "false_deep_anchor_max_slope_percent": version_false_deep.get("anchor_max_slope_percent", ""),
-            "false_deep_anchor_max_error_f": version_false_deep.get("anchor_max_error_f", ""),
-            "false_deep_anchor_min_depth_margin_m": version_false_deep.get("anchor_min_depth_margin_m", ""),
-            "false_deep_suspect_max_sdi": version_false_deep.get("suspect_max_sdi", ""),
-            "false_deep_suspect_min_slope_percent": version_false_deep.get("suspect_min_slope_percent", ""),
-            "false_deep_suspect_growth_depth_fraction": version_false_deep.get("suspect_growth_depth_fraction", ""),
-            "false_deep_suspect_growth_sdi_margin": version_false_deep.get("suspect_growth_sdi_margin", ""),
-            "false_deep_search_radius_px": version_false_deep.get("search_radius_px", ""),
-            "false_deep_min_anchor_count": version_false_deep.get("min_anchor_count", ""),
-            "false_deep_correction_tolerance_m": version_false_deep.get("correction_tolerance_m", ""),
-            "false_deep_max_patch_size_px": version_false_deep.get("max_patch_size_px", ""),
-            "false_deep_treat_min_depth_as_barrier": version_false_deep.get("treat_min_depth_as_barrier", ""),
-            "false_deep_barrier_depth_margin_m": version_false_deep.get("barrier_depth_margin_m", ""),
-            "false_deep_barrier_min_sdi": version_false_deep.get("barrier_min_sdi", ""),
-            "false_deep_protect_true_deep_water": version_false_deep.get("protect_true_deep_water", ""),
-            "false_deep_true_deep_min_enclosure_fraction": version_false_deep.get("true_deep_min_enclosure_fraction", ""),
-            "false_deep_true_deep_border_min_enclosure_fraction": version_false_deep.get("true_deep_border_min_enclosure_fraction", ""),
-            "false_deep_true_deep_min_anchor_quadrants": version_false_deep.get("true_deep_min_anchor_quadrants", ""),
-            "false_deep_true_deep_border_min_anchor_quadrants": version_false_deep.get("true_deep_border_min_anchor_quadrants", ""),
-            "false_deep_true_deep_large_patch_size_px": version_false_deep.get("true_deep_large_patch_size_px", ""),
-            "false_deep_true_deep_smooth_slope_percent": version_false_deep.get("true_deep_smooth_slope_percent", ""),
-            "false_deep_debug_export": version_false_deep.get("debug_export", False),
+            "anomaly_search_enabled": bool(version_anomaly_search.get("enabled", False)),
+            "anomaly_search_export_local_moran_raster": bool(version_anomaly_search.get("export_local_moran_raster", False)),
+            "anomaly_search_export_suspicious_binary_raster": bool(version_anomaly_search.get("export_suspicious_binary_raster", False)),
+            "anomaly_search_export_interpolated_rasters": bool(version_anomaly_search.get("export_interpolated_rasters", False)),
             "relaxed": bool(version.get("relaxed", False)),
             "output_folder": out_folder,
             "output_file": initial_ofile,
@@ -5529,7 +5351,7 @@ def gui():
             "initial_guess_debug": bool(version.get("initial_guess_debug", False)),
             "fully_relaxed": bool(version.get("fully_relaxed", False)),
             "output_modeled_reflectance": bool(version.get("output_modeled_reflectance", False)),
-            "false_deep_correction_settings": copy.deepcopy(version.get("false_deep_correction_settings", {})),
+            "anomaly_search_settings": copy.deepcopy(version.get("anomaly_search_settings", {})),
             "xml_dict": _build_input_dict_for_version(version, file_iop, file_sensor, ofile, version_index),
             "output_format": version.get("output_format", output_format.get()),
             "bathy_path": version.get("bathy_path", "") if version.get("use_bathy", False) else "",
@@ -5555,7 +5377,7 @@ def gui():
         primary_version["initial_guess_debug"],
         primary_version["fully_relaxed"],
         primary_version["output_modeled_reflectance"],
-        primary_version["false_deep_correction_settings"],
+        primary_version["anomaly_search_settings"],
         primary_version["pmin"],
         primary_version["pmax"],
         primary_version["xml_file"],
