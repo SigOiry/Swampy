@@ -342,11 +342,15 @@ def _parse_crop_selection(config_root):
                     'max_lat': max_lat,
                 }
     mask_path = _resolve_bundled_resource(config_root.get('crop_mask_path'))
+    mask_buffer_m = _coerce_float(config_root.get('crop_mask_buffer_m'), np.nan)
+    if not np.isfinite(mask_buffer_m) or mask_buffer_m <= 0.0:
+        mask_buffer_m = None
     if not bbox and not mask_path:
         return None
     return {
         'bbox': bbox,
         'mask_path': mask_path,
+        'mask_buffer_m': mask_buffer_m if mask_path else None,
     }
 
 
@@ -565,6 +569,13 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im, gr
     if mask_path:
         if not os.path.isfile(mask_path):
             raise RuntimeError(f"Shapefile mask not found: {mask_path}")
+        point_buffer_m = crop_selection.get('mask_buffer_m')
+        try:
+            point_buffer_m = float(point_buffer_m)
+        except (TypeError, ValueError):
+            point_buffer_m = 50.0
+        if point_buffer_m <= 0.0:
+            point_buffer_m = 50.0
         import fiona
         from rasterio.features import geometry_mask
         from rasterio.warp import transform_geom
@@ -606,7 +617,12 @@ def _apply_crop_selection(rrs, lat_array, lon_array, crop_selection, file_im, gr
                 geometry = feature.get('geometry')
                 if not geometry:
                     continue
-                geometries.append(_transform_with_optional_point_buffer(geometry, src_crs, crs.to_string()))
+                geometries.append(_transform_with_optional_point_buffer(
+                    geometry,
+                    src_crs,
+                    crs.to_string(),
+                    point_buffer_m=point_buffer_m,
+                ))
         if not geometries:
             raise RuntimeError("The shapefile mask does not contain any valid geometry.")
         shape_mask = geometry_mask(
@@ -787,6 +803,291 @@ def _write_deep_water_pixel_csv(csv_path, pixel_rows):
         writer.writeheader()
         for row in pixel_rows:
             writer.writerow(row)
+
+
+def _format_batch_setting_value(value):
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, bool):
+        return 'yes' if value else 'no'
+    if value is None:
+        return ''
+    if isinstance(value, float):
+        return format(value, '.15g')
+    if isinstance(value, (int, str)):
+        return str(value)
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str)
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return ''
+        if any(isinstance(item, (dict, list, tuple, np.ndarray, np.generic)) for item in value):
+            return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str)
+        return ' | '.join(_format_batch_setting_value(item) for item in value)
+    return str(value)
+
+
+def _flatten_batch_run_settings_record(record):
+    row = {}
+
+    def add(key, value):
+        row[key] = _format_batch_setting_value(value)
+
+    add('run_version_index', record.get('run_version_index', ''))
+    add('run_version_label', record.get('run_version_label', ''))
+    add('run_version_suffix', record.get('run_version_suffix', ''))
+    add('run_version_output_folder', record.get('run_version_output_folder', ''))
+
+    add('output_format', record.get('output_format', ''))
+    add('post_processing', record.get('post_processing', False))
+    add('output_modeled_reflectance', record.get('output_modeled_reflectance', False))
+    add('allow_split', record.get('allow_split', False))
+    add('split_chunk_rows', record.get('split_chunk_rows', ''))
+    add('nedr_mode', record.get('nedr_mode', 'fixed'))
+
+    crop_selection = record.get('crop_selection') or {}
+    crop_bbox = crop_selection.get('bbox') or {}
+    add('crop_enabled', bool(crop_selection))
+    add('crop_min_lon', crop_bbox.get('min_lon', ''))
+    add('crop_max_lon', crop_bbox.get('max_lon', ''))
+    add('crop_min_lat', crop_bbox.get('min_lat', ''))
+    add('crop_max_lat', crop_bbox.get('max_lat', ''))
+    add('crop_mask_path', crop_selection.get('mask_path', ''))
+    add('crop_mask_buffer_m', crop_selection.get('mask_buffer_m', ''))
+
+    deep_water_selection = record.get('deep_water_selection') or {}
+    deep_water_polygons = deep_water_selection.get('polygons') or []
+    add('deep_water_enabled', bool(deep_water_selection))
+    add('deep_water_use_sd_bounds', deep_water_selection.get('use_sd_bounds', False))
+    add('deep_water_polygon_count', len(deep_water_polygons))
+    add('deep_water_polygons_json', deep_water_polygons)
+
+    siop_payload = record.get('siop_popup') or {}
+    for key, value in siop_payload.items():
+        add(f'siop_{key}', value)
+
+    pmin_values = list(record.get('pmin') or [])
+    pmax_values = list(record.get('pmax') or [])
+    bound_names = ('chl', 'cdom', 'nap', 'depth', 'substrate_1', 'substrate_2', 'substrate_3')
+    for index, name in enumerate(bound_names):
+        add(f'pmin_{name}', pmin_values[index] if index < len(pmin_values) else '')
+        add(f'pmax_{name}', pmax_values[index] if index < len(pmax_values) else '')
+
+    sensor_payload = record.get('sensor_popup') or {}
+    for key, value in sensor_payload.items():
+        add(f'sensor_{key}', value)
+
+    add('rrs_flag', record.get('rrs_flag', True))
+    add('reflectance_input', record.get('reflectance_input', False))
+    add('relaxed', record.get('relaxed', False))
+    add('fully_relaxed', record.get('fully_relaxed', False))
+    add('shallow', record.get('shallow', False))
+    add('optimize_initial_guesses', record.get('optimize_initial_guesses', False))
+    add('use_five_initial_guesses', record.get('use_five_initial_guesses', False))
+    add('initial_guess_debug', record.get('initial_guess_debug', False))
+
+    add('use_bathy', record.get('use_bathy', False))
+    add('bathy_path', record.get('bathy_path', ''))
+    add('bathy_reference', record.get('bathy_reference', ''))
+    add('bathy_correction_m', record.get('bathy_correction_m', ''))
+    add('bathy_tolerance_m', record.get('bathy_tolerance_m', ''))
+
+    anomaly_search = record.get('anomaly_search_settings') or {}
+    for key, value in anomaly_search.items():
+        add(f'anomaly_search_{key}', value)
+
+    return row
+
+
+def _build_batch_run_settings_csv(records):
+    flattened_rows = [_flatten_batch_run_settings_record(record) for record in records]
+    if not flattened_rows:
+        return [], []
+
+    id_columns = [
+        'run_version_index',
+        'run_version_label',
+        'run_version_suffix',
+        'run_version_output_folder',
+    ]
+    ordered_keys = []
+    for row in flattened_rows:
+        for key in row.keys():
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+
+    varying_columns = []
+    for key in ordered_keys:
+        if key in id_columns:
+            continue
+        values = [row.get(key, '') for row in flattened_rows]
+        if any(value != values[0] for value in values[1:]):
+            varying_columns.append(key)
+
+    fieldnames = [key for key in id_columns if key in ordered_keys] + varying_columns
+    csv_rows = [
+        {key: row.get(key, '') for key in fieldnames}
+        for row in flattened_rows
+    ]
+    return fieldnames, csv_rows
+
+
+def _write_batch_run_settings_csv(csv_path, records):
+    fieldnames, rows = _build_batch_run_settings_csv(records)
+    if not fieldnames or not rows:
+        return
+    with open(csv_path, 'w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _resolve_batch_run_root_dir(version_output_dirs, fallback_dir=None):
+    normalised_dirs = []
+    for output_dir in version_output_dirs or []:
+        if not output_dir:
+            continue
+        try:
+            abs_dir = os.path.abspath(output_dir)
+        except Exception:
+            continue
+        if abs_dir not in normalised_dirs:
+            normalised_dirs.append(abs_dir)
+
+    fallback_abs = None
+    if fallback_dir:
+        try:
+            fallback_abs = os.path.abspath(fallback_dir)
+        except Exception:
+            fallback_abs = None
+
+    if not normalised_dirs:
+        return fallback_abs
+    if len(normalised_dirs) == 1:
+        return normalised_dirs[0]
+
+    parent_dirs = []
+    for output_dir in normalised_dirs:
+        parent_dir = os.path.dirname(output_dir.rstrip("\\/")) or output_dir
+        if parent_dir not in parent_dirs:
+            parent_dirs.append(parent_dir)
+    if len(parent_dirs) == 1:
+        return parent_dirs[0]
+
+    try:
+        common_dir = os.path.commonpath(normalised_dirs)
+    except ValueError:
+        common_dir = ''
+    if common_dir:
+        return common_dir
+    return fallback_abs or normalised_dirs[0]
+
+
+def _resolve_execution_version_settings(
+    run_version,
+    *,
+    default_siop_xml_path,
+    default_file_sensor,
+    default_pmin,
+    default_pmax,
+    default_above_rrs_flag,
+    default_reflectance_input_flag,
+    default_relaxed,
+    default_shallow_flag,
+    default_optimize_initial_guesses,
+    default_use_five_initial_guesses,
+    default_initial_guess_debug,
+    default_fully_relaxed,
+    default_output_modeled_reflectance,
+    default_anomaly_search_settings,
+    default_xml_dict,
+    default_output_format,
+    default_bathy_path,
+    default_post_processing,
+    default_allow_split,
+    default_split_chunk_rows,
+    default_bathy_reference,
+    default_bathy_correction_m,
+    default_bathy_tolerance_m,
+    default_nedr_mode,
+    format_override=None,
+    nedr_mode_override=None,
+):
+    version_label = str(run_version.get('label', 'Settings 01'))
+    resolved = {
+        'label': version_label,
+        'suffix': str(run_version.get('suffix', '') or ''),
+        'index': int(run_version.get('index', 1) or 1),
+        'count': int(run_version.get('count', 1) or 1),
+        'output_dir': run_version.get('output_dir'),
+        'siop_xml_path': run_version.get('siop_xml_path', default_siop_xml_path),
+        'file_sensor': run_version.get('file_sensor', default_file_sensor),
+        'pmin': np.asarray(run_version.get('pmin', default_pmin), dtype=float),
+        'pmax': np.asarray(run_version.get('pmax', default_pmax), dtype=float),
+        'above_rrs_flag': _coerce_bool(run_version.get('above_rrs_flag', default_above_rrs_flag), default_above_rrs_flag),
+        'reflectance_input_flag': _coerce_bool(run_version.get('reflectance_input_flag', default_reflectance_input_flag), default_reflectance_input_flag),
+        'relaxed': _coerce_bool(run_version.get('relaxed', default_relaxed), default_relaxed),
+        'shallow_flag': _coerce_bool(run_version.get('shallow_flag', default_shallow_flag), default_shallow_flag),
+        'optimize_initial_guesses': _coerce_bool(run_version.get('optimize_initial_guesses', default_optimize_initial_guesses), default_optimize_initial_guesses),
+        'use_five_initial_guesses': _coerce_bool(run_version.get('use_five_initial_guesses', default_use_five_initial_guesses), default_use_five_initial_guesses),
+        'initial_guess_debug': _coerce_bool(run_version.get('initial_guess_debug', default_initial_guess_debug), default_initial_guess_debug),
+        'fully_relaxed': _coerce_bool(run_version.get('fully_relaxed', default_fully_relaxed), default_fully_relaxed),
+        'output_modeled_reflectance': _coerce_bool(run_version.get('output_modeled_reflectance', default_output_modeled_reflectance), default_output_modeled_reflectance),
+        'bathy_path': _resolve_bundled_resource(run_version.get('bathy_path', default_bathy_path)),
+        'xml_dict': copy.deepcopy(run_version.get('xml_dict', default_xml_dict)),
+        'output_format': str(run_version.get('output_format', default_output_format)).lower(),
+        'post_processing': _coerce_bool(run_version.get('post_processing', default_post_processing), default_post_processing),
+        'allow_split': _coerce_bool(run_version.get('allow_split', default_allow_split), default_allow_split),
+        'split_chunk_rows': _parse_chunk_rows(run_version.get('split_chunk_rows', default_split_chunk_rows)),
+    }
+    resolved['anomaly_search_settings'] = _finalise_anomaly_search_settings(
+        run_version.get('anomaly_search_settings', default_anomaly_search_settings),
+        use_input_bathy=bool(resolved['bathy_path']),
+    )
+    resolved['bathy_reference'] = str(resolved['xml_dict'].get('bathy_reference', default_bathy_reference)).strip().lower()
+    resolved['bathy_correction_m'] = _coerce_float(
+        resolved['xml_dict'].get('bathy_correction_m', default_bathy_correction_m),
+        default_bathy_correction_m,
+    )
+    resolved['bathy_tolerance_m'] = _coerce_float(
+        resolved['xml_dict'].get('bathy_tolerance_m', default_bathy_tolerance_m),
+        default_bathy_tolerance_m,
+    )
+    resolved['nedr_mode'] = str(resolved['xml_dict'].get('nedr_mode', default_nedr_mode)).strip().lower()
+    resolved['crop_selection'] = _parse_crop_selection(resolved['xml_dict'])
+    resolved['deep_water_selection'] = _parse_deep_water_selection(resolved['xml_dict'])
+    resolved['saved_sensor_band_mapping'] = _parse_saved_sensor_band_mapping(resolved['xml_dict'])
+
+    warnings = []
+    if resolved['fully_relaxed'] and not resolved['relaxed']:
+        warnings.append(f"{version_label}: fully relaxed substrate mode requires relaxed constraints. Disabling fully relaxed mode.")
+        resolved['fully_relaxed'] = False
+
+    if resolved['use_five_initial_guesses'] and not resolved['optimize_initial_guesses']:
+        warnings.append(f"{version_label}: five-point initial guess testing requires initial guess optimisation. Disabling 5-point testing.")
+        resolved['use_five_initial_guesses'] = False
+    if resolved['initial_guess_debug'] and not resolved['optimize_initial_guesses']:
+        warnings.append(f"{version_label}: initial guess debug export requires initial guess optimisation. Disabling debug export.")
+        resolved['initial_guess_debug'] = False
+
+    if resolved['allow_split'] and resolved['post_processing']:
+        warnings.append(f"{version_label}: post-processing is not supported when image splitting is enabled. Skipping post-processing step.")
+        resolved['post_processing'] = False
+
+    if format_override:
+        resolved['output_format'] = format_override
+    if nedr_mode_override:
+        resolved['nedr_mode'] = nedr_mode_override
+
+    if resolved['nedr_mode'] not in ('scene', 'fixed'):
+        warnings.append(f"{version_label}: unsupported NEDR mode '{resolved['nedr_mode']}'. Falling back to fixed.")
+        resolved['nedr_mode'] = 'fixed'
+
+    resolved['warnings'] = warnings
+    return resolved
 
 
 def _suggest_chunk_rows(height, width, target_pixels=_SPLIT_TARGET_PIXELS, min_rows=_SPLIT_MIN_ROWS):
@@ -1382,6 +1683,13 @@ def _normalise_anomaly_search_settings(raw_settings):
         for key in settings:
             if key in raw_settings:
                 settings[key] = _coerce_bool(raw_settings.get(key), settings[key])
+    return settings
+
+
+def _finalise_anomaly_search_settings(raw_settings, use_input_bathy=False):
+    settings = _normalise_anomaly_search_settings(raw_settings)
+    if use_input_bathy:
+        settings['enabled'] = False
     return settings
 
 
@@ -2913,12 +3221,12 @@ if __name__ == "__main__":
             crop_selection = _parse_crop_selection(root)
             deep_water_selection = _parse_deep_water_selection(root)
             saved_sensor_band_mapping = _parse_saved_sensor_band_mapping(root)
-            anomaly_search_settings = _normalise_anomaly_search_settings({
+            raw_anomaly_search_settings = {
                 'enabled': root.get('anomaly_search_enabled', False),
                 'export_local_moran_raster': root.get('anomaly_search_export_local_moran_raster', False),
                 'export_suspicious_binary_raster': root.get('anomaly_search_export_suspicious_binary_raster', False),
                 'export_interpolated_rasters': root.get('anomaly_search_export_interpolated_rasters', False),
-            })
+            }
 
 
 
@@ -2932,6 +3240,10 @@ if __name__ == "__main__":
             bathy_reference = str(root.get('bathy_reference', 'depth')).strip().lower()
             bathy_correction_m = _coerce_float(root.get('bathy_correction_m'), 0.0)
             bathy_tolerance_m = _coerce_float(root.get('bathy_tolerance_m'), 0.0)
+            anomaly_search_settings = _finalise_anomaly_search_settings(
+                raw_anomaly_search_settings,
+                use_input_bathy=bool(bathy_path),
+            )
             nedr_mode = str(root.get('nedr_mode', 'fixed')).strip().lower()
             allow_split = _coerce_bool(root.get('allow_split', False))
             split_chunk_rows = _parse_chunk_rows(root.get('split_chunk_rows'))
@@ -2948,6 +3260,10 @@ if __name__ == "__main__":
             gui_run_versions = extra_gui_result[0] if extra_gui_result else []
             split_chunk_rows = _parse_chunk_rows(split_chunk_rows_str)
             bathy_path = _resolve_bundled_resource(bathy_path)
+            anomaly_search_settings = _finalise_anomaly_search_settings(
+                anomaly_search_settings,
+                use_input_bathy=bool(bathy_path),
+            )
             bathy_reference = str(xml_dict.get('bathy_reference', 'depth')).strip().lower()
             bathy_correction_m = _coerce_float(xml_dict.get('bathy_correction_m'), 0.0)
             bathy_tolerance_m = _coerce_float(xml_dict.get('bathy_tolerance_m'), 0.0)
@@ -3014,17 +3330,105 @@ if __name__ == "__main__":
             if gui_run_dir:
                 os.makedirs(gui_run_dir, exist_ok=True)
         # GUI mode previously wrote a single XML; we'll now write one per output alongside the file
+        resolved_execution_versions = []
+        for run_version in execution_versions:
+            resolved_version = _resolve_execution_version_settings(
+                run_version,
+                default_siop_xml_path=siop_xml_path,
+                default_file_sensor=file_sensor,
+                default_pmin=pmin,
+                default_pmax=pmax,
+                default_above_rrs_flag=above_rrs_flag,
+                default_reflectance_input_flag=reflectance_input_flag,
+                default_relaxed=relaxed,
+                default_shallow_flag=shallow_flag,
+                default_optimize_initial_guesses=optimize_initial_guesses,
+                default_use_five_initial_guesses=use_five_initial_guesses,
+                default_initial_guess_debug=initial_guess_debug,
+                default_fully_relaxed=fully_relaxed,
+                default_output_modeled_reflectance=output_modeled_reflectance,
+                default_anomaly_search_settings=anomaly_search_settings,
+                default_xml_dict=xml_dict if 'xml_dict' in locals() else {},
+                default_output_format=output_format,
+                default_bathy_path=bathy_path,
+                default_post_processing=pp,
+                default_allow_split=allow_split,
+                default_split_chunk_rows=split_chunk_rows,
+                default_bathy_reference=bathy_reference,
+                default_bathy_correction_m=bathy_correction_m,
+                default_bathy_tolerance_m=bathy_tolerance_m,
+                default_nedr_mode=nedr_mode,
+                format_override=args.format,
+                nedr_mode_override=args.nedr_mode,
+            )
+            for warning_message in resolved_version.pop('warnings', []):
+                print(f"[WARN]: {warning_message}")
+            resolved_execution_versions.append(resolved_version)
+
+        batch_run_root_dir = None
+        if not args.path:
+            batch_run_root_dir = _resolve_batch_run_root_dir(
+                [resolved_version.get('output_dir') for resolved_version in resolved_execution_versions],
+                fallback_dir=gui_run_dir,
+            )
+            if batch_run_root_dir:
+                os.makedirs(batch_run_root_dir, exist_ok=True)
+        batch_settings_csv_path = (
+            os.path.join(batch_run_root_dir, 'batch_run_settings.csv')
+            if (len(resolved_execution_versions) > 1 and batch_run_root_dir)
+            else None
+        )
+        if batch_settings_csv_path:
+            batch_settings_records = []
+            for resolved_version in resolved_execution_versions:
+                batch_settings_records.append({
+                    'run_version_index': resolved_version['index'],
+                    'run_version_label': resolved_version['label'],
+                    'run_version_suffix': resolved_version['suffix'],
+                    'run_version_output_folder': resolved_version.get('output_dir') or gui_run_dir,
+                    'output_format': resolved_version['output_format'],
+                    'post_processing': resolved_version['post_processing'],
+                    'output_modeled_reflectance': resolved_version['output_modeled_reflectance'],
+                    'allow_split': resolved_version['allow_split'],
+                    'split_chunk_rows': resolved_version['split_chunk_rows'],
+                    'nedr_mode': resolved_version['nedr_mode'],
+                    'crop_selection': copy.deepcopy(resolved_version['crop_selection']),
+                    'deep_water_selection': copy.deepcopy(resolved_version['deep_water_selection']),
+                    'siop_popup': copy.deepcopy((resolved_version.get('xml_dict') or {}).get('siop_popup', {})),
+                    'sensor_popup': copy.deepcopy((resolved_version.get('xml_dict') or {}).get('sensor_popup', {})),
+                    'pmin': list(np.asarray(resolved_version['pmin']).tolist()),
+                    'pmax': list(np.asarray(resolved_version['pmax']).tolist()),
+                    'rrs_flag': resolved_version['above_rrs_flag'],
+                    'reflectance_input': resolved_version['reflectance_input_flag'],
+                    'relaxed': resolved_version['relaxed'],
+                    'fully_relaxed': resolved_version['fully_relaxed'],
+                    'shallow': resolved_version['shallow_flag'],
+                    'optimize_initial_guesses': resolved_version['optimize_initial_guesses'],
+                    'use_five_initial_guesses': resolved_version['use_five_initial_guesses'],
+                    'initial_guess_debug': resolved_version['initial_guess_debug'],
+                    'use_bathy': bool(resolved_version['bathy_path']),
+                    'bathy_path': resolved_version['bathy_path'] if resolved_version['bathy_path'] else '',
+                    'bathy_reference': resolved_version['bathy_reference'],
+                    'bathy_correction_m': resolved_version['bathy_correction_m'],
+                    'bathy_tolerance_m': resolved_version['bathy_tolerance_m'],
+                    'anomaly_search_settings': copy.deepcopy(resolved_version['anomaly_search_settings']),
+                })
+            try:
+                _write_batch_run_settings_csv(batch_settings_csv_path, batch_settings_records)
+                print(f"[INFO]: Wrote batch settings summary CSV: {batch_settings_csv_path}")
+            except Exception as e:
+                print(f"[WARN]: Failed to write batch settings summary CSV '{batch_settings_csv_path}': {e}")
 
         execution_tasks = [
             (run_version, file_im)
-            for run_version in execution_versions
+            for run_version in resolved_execution_versions
             for file_im in files_to_process
         ]
         for task_index, (run_version, file_im) in enumerate(execution_tasks, start=1):
             version_label = str(run_version.get('label', 'Settings 01'))
             run_version_suffix = str(run_version.get('suffix', '') or '')
             version_index = int(run_version.get('index', 1) or 1)
-            version_count = int(run_version.get('count', len(execution_versions)) or len(execution_versions))
+            version_count = int(run_version.get('count', len(resolved_execution_versions)) or len(resolved_execution_versions))
             version_output_dir = run_version.get('output_dir') or gui_run_dir
             if version_output_dir:
                 os.makedirs(version_output_dir, exist_ok=True)
@@ -3041,46 +3445,20 @@ if __name__ == "__main__":
             initial_guess_debug = _coerce_bool(run_version.get('initial_guess_debug', initial_guess_debug), initial_guess_debug)
             fully_relaxed = _coerce_bool(run_version.get('fully_relaxed', fully_relaxed), fully_relaxed)
             output_modeled_reflectance = _coerce_bool(run_version.get('output_modeled_reflectance', output_modeled_reflectance), output_modeled_reflectance)
-            anomaly_search_settings = _normalise_anomaly_search_settings(
-                run_version.get('anomaly_search_settings', anomaly_search_settings)
-            )
+            bathy_path = run_version.get('bathy_path', bathy_path)
+            anomaly_search_settings = copy.deepcopy(run_version.get('anomaly_search_settings', anomaly_search_settings))
             xml_dict = copy.deepcopy(run_version.get('xml_dict', xml_dict if 'xml_dict' in locals() else {}))
             output_format = str(run_version.get('output_format', output_format)).lower()
-            bathy_path = _resolve_bundled_resource(run_version.get('bathy_path', bathy_path))
             pp = _coerce_bool(run_version.get('post_processing', pp), pp)
             allow_split = _coerce_bool(run_version.get('allow_split', allow_split), allow_split)
             split_chunk_rows = _parse_chunk_rows(run_version.get('split_chunk_rows', split_chunk_rows))
-            bathy_reference = str(xml_dict.get('bathy_reference', bathy_reference)).strip().lower()
-            bathy_correction_m = _coerce_float(xml_dict.get('bathy_correction_m'), bathy_correction_m)
-            bathy_tolerance_m = _coerce_float(xml_dict.get('bathy_tolerance_m'), bathy_tolerance_m)
-            nedr_mode = str(xml_dict.get('nedr_mode', nedr_mode)).strip().lower()
-            crop_selection = _parse_crop_selection(xml_dict)
-            deep_water_selection = _parse_deep_water_selection(xml_dict)
-            saved_sensor_band_mapping = _parse_saved_sensor_band_mapping(xml_dict)
-
-            if fully_relaxed and not relaxed:
-                print(f"[WARN]: {version_label}: fully relaxed substrate mode requires relaxed constraints. Disabling fully relaxed mode.")
-                fully_relaxed = False
-
-            if use_five_initial_guesses and not optimize_initial_guesses:
-                print(f"[WARN]: {version_label}: five-point initial guess testing requires initial guess optimisation. Disabling 5-point testing.")
-                use_five_initial_guesses = False
-            if initial_guess_debug and not optimize_initial_guesses:
-                print(f"[WARN]: {version_label}: initial guess debug export requires initial guess optimisation. Disabling debug export.")
-                initial_guess_debug = False
-
-            if allow_split and pp:
-                print(f"[WARN]: {version_label}: post-processing is not supported when image splitting is enabled. Skipping post-processing step.")
-                pp = False
-
-            if args.format:
-                output_format = args.format
-            if args.nedr_mode:
-                nedr_mode = args.nedr_mode
-
-            if nedr_mode not in ('scene', 'fixed'):
-                print(f"[WARN]: Unsupported NEDR mode '{nedr_mode}'. Falling back to fixed.")
-                nedr_mode = 'fixed'
+            bathy_reference = str(run_version.get('bathy_reference', bathy_reference)).strip().lower()
+            bathy_correction_m = _coerce_float(run_version.get('bathy_correction_m'), bathy_correction_m)
+            bathy_tolerance_m = _coerce_float(run_version.get('bathy_tolerance_m'), bathy_tolerance_m)
+            nedr_mode = str(run_version.get('nedr_mode', nedr_mode)).strip().lower()
+            crop_selection = copy.deepcopy(run_version.get('crop_selection'))
+            deep_water_selection = copy.deepcopy(run_version.get('deep_water_selection'))
+            saved_sensor_band_mapping = copy.deepcopy(run_version.get('saved_sensor_band_mapping'))
 
             print(
                 f"[INFO]: Processing task {task_index}/{total_task_count}: "
@@ -3559,7 +3937,11 @@ if __name__ == "__main__":
                     )
                 mask_path = str(crop_selection.get('mask_path') or '').strip()
                 if mask_path:
-                    message_parts.append(f"mask {os.path.basename(mask_path)}")
+                    mask_buffer_m = crop_selection.get('mask_buffer_m')
+                    if mask_buffer_m not in (None, ''):
+                        message_parts.append(f"mask {os.path.basename(mask_path)} (buffer {float(mask_buffer_m):g} m)")
+                    else:
+                        message_parts.append(f"mask {os.path.basename(mask_path)}")
                 print(f"[INFO]: Applying spatial selection ({'; '.join(message_parts)}).")
 
             legacy_lat = lat_grid.copy() if rotated_input_mode and lat_grid is not None else None

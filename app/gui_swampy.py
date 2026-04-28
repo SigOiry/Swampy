@@ -86,6 +86,10 @@ def _parse_bool_text(value, default=False):
     return default
 
 
+def _anomaly_search_available_for_bathy_source(source):
+    return str(source or "estimate").strip().lower() == "estimate"
+
+
 def _paths_equivalent(path_a, path_b):
     if not path_a or not path_b:
         return False
@@ -589,7 +593,7 @@ def _prepare_preview_coordinate_grids(variables, height, width):
     return None, None, lat_name, lon_name
 
 
-def _load_vector_mask_geometries(path):
+def _load_vector_mask_geometries(path, point_buffer_m=50.0):
     import fiona
     from rasterio.warp import transform_geom
     from shapely.geometry import mapping, shape
@@ -615,7 +619,12 @@ def _load_vector_mask_geometries(path):
             geometry = feature.get('geometry')
             if not geometry:
                 continue
-            transformed = _transform_with_optional_point_buffer(geometry, src_crs, "EPSG:4326")
+            transformed = _transform_with_optional_point_buffer(
+                geometry,
+                src_crs,
+                "EPSG:4326",
+                point_buffer_m=point_buffer_m,
+            )
             geometries.append(transformed)
     if not geometries:
         raise RuntimeError("The shapefile does not contain any valid geometry.")
@@ -1564,8 +1573,16 @@ def gui():
         else:
             bbox = None
         mask_path = str(normalized.get("mask_path") or "").strip()
+        mask_buffer_m = normalized.get("mask_buffer_m")
+        try:
+            mask_buffer_m = float(mask_buffer_m)
+        except (TypeError, ValueError):
+            mask_buffer_m = None
+        if mask_buffer_m is not None and mask_buffer_m <= 0.0:
+            mask_buffer_m = None
         normalized["bbox"] = bbox
         normalized["mask_path"] = mask_path
+        normalized["mask_buffer_m"] = mask_buffer_m if mask_path else None
         if not bbox and not mask_path:
             return None
         return normalized
@@ -1604,7 +1621,11 @@ def gui():
             )
         mask_path = str(selection.get("mask_path") or "").strip()
         if mask_path:
-            parts.append(f"Mask {os.path.basename(mask_path)}")
+            buffer_m = selection.get("mask_buffer_m")
+            if buffer_m not in (None, ""):
+                parts.append(f"Mask {os.path.basename(mask_path)} (buffer {float(buffer_m):g} m)")
+            else:
+                parts.append(f"Mask {os.path.basename(mask_path)}")
         return " | ".join(parts) if parts else "Full scene"
 
     def _format_deep_water_summary(selection):
@@ -1757,18 +1778,22 @@ def gui():
         lat_min = float(np.nanmin(lat_grid[finite_coord_mask]))
         lat_max = float(np.nanmax(lat_grid[finite_coord_mask]))
 
-        existing_selection = _normalise_crop_selection(crop_selection) or {"bbox": None, "mask_path": ""}
+        existing_selection = _normalise_crop_selection(crop_selection) or {"bbox": None, "mask_path": "", "mask_buffer_m": None}
         existing_source_path = str(existing_selection.get("source_path") or "").strip()
         if existing_source_path and not _paths_equivalent(existing_source_path, first_image):
-            existing_selection = {"bbox": None, "mask_path": ""}
+            existing_selection = {"bbox": None, "mask_path": "", "mask_buffer_m": None}
 
         existing_mask_geometries = []
         existing_mask_path = str(existing_selection.get("mask_path") or "").strip()
         if existing_mask_path:
             try:
-                existing_mask_geometries = _load_vector_mask_geometries(existing_mask_path)
+                existing_mask_geometries = _load_vector_mask_geometries(
+                    existing_mask_path,
+                    point_buffer_m=float(existing_selection.get("mask_buffer_m") or 50.0),
+                )
             except Exception:
                 existing_selection["mask_path"] = ""
+                existing_selection["mask_buffer_m"] = None
 
         return {
             "title": "Crop area",
@@ -1784,6 +1809,7 @@ def gui():
             "selection": {
                 "bbox": existing_selection.get("bbox"),
                 "mask_path": existing_selection.get("mask_path", ""),
+                "mask_buffer_m": existing_selection.get("mask_buffer_m"),
                 "mask_geometries": existing_mask_geometries,
             },
         }
@@ -2113,29 +2139,60 @@ def gui():
         )
 
     def open_anomaly_search_popup():
+        feature_available = _anomaly_search_available_for_bathy_source(bathy_source.get())
+        feature_enabled = feature_available and bool(anomaly_search_flag.get())
         export_local_moran_var = BooleanVar(value=bool(anomaly_search_settings["export_local_moran_raster"]))
         export_suspicious_binary_var = BooleanVar(value=bool(anomaly_search_settings["export_suspicious_binary_raster"]))
         export_interpolated_var = BooleanVar(value=bool(anomaly_search_settings["export_interpolated_rasters"]))
 
         def build_settings(settings_frame):
             settings_frame.columnconfigure(0, weight=1)
-            ttk.Checkbutton(
+            next_row = 0
+            if not feature_available:
+                ttk.Label(
+                    settings_frame,
+                    text=(
+                        "This correction is available only when bathymetry is estimated from the image. "
+                        "It is disabled whenever user-defined or EMODnet bathymetry is selected."
+                    ),
+                    wraplength=620,
+                    justify="left",
+                ).grid(row=next_row, column=0, sticky="w", pady=(0, 8))
+                next_row += 1
+            elif not feature_enabled:
+                ttk.Label(
+                    settings_frame,
+                    text="Enable 'Correct steep false-deep bathymetry' on the main page to use the options below.",
+                    wraplength=620,
+                    justify="left",
+                ).grid(row=next_row, column=0, sticky="w", pady=(0, 8))
+                next_row += 1
+
+            export_local_moran_check = ttk.Checkbutton(
                 settings_frame,
                 text="Export edge / plateau debug rasters",
                 variable=export_local_moran_var,
-            ).grid(row=0, column=0, sticky="w", pady=2)
-            ttk.Checkbutton(
+            )
+            export_local_moran_check.grid(row=next_row, column=0, sticky="w", pady=2)
+            export_suspicious_binary_check = ttk.Checkbutton(
                 settings_frame,
                 text="Export suspicious/not-suspicious raster",
                 variable=export_suspicious_binary_var,
-            ).grid(row=1, column=0, sticky="w", pady=2)
-            ttk.Checkbutton(
+            )
+            export_suspicious_binary_check.grid(row=next_row + 1, column=0, sticky="w", pady=2)
+            export_interpolated_check = ttk.Checkbutton(
                 settings_frame,
                 text="Export interpolated depth / CHL / CDOM / NAP rasters",
                 variable=export_interpolated_var,
-            ).grid(row=2, column=0, sticky="w", pady=2)
+            )
+            export_interpolated_check.grid(row=next_row + 2, column=0, sticky="w", pady=2)
+            _set_widget_enabled(export_local_moran_check, feature_enabled)
+            _set_widget_enabled(export_suspicious_binary_check, feature_enabled)
+            _set_widget_enabled(export_interpolated_check, feature_enabled)
 
         def apply_anomaly_search_changes():
+            if not feature_enabled:
+                return True
             anomaly_search_settings["export_local_moran_raster"] = bool(export_local_moran_var.get())
             anomaly_search_settings["export_suspicious_binary_raster"] = bool(export_suspicious_binary_var.get())
             anomaly_search_settings["export_interpolated_rasters"] = bool(export_interpolated_var.get())
@@ -4191,6 +4248,12 @@ def gui():
         elif bathy_source.get() == "user":
             bathy_source.set("estimate")
 
+    def _update_anomaly_search_availability():
+        feature_available = _anomaly_search_available_for_bathy_source(bathy_source.get())
+        if not feature_available:
+            anomaly_search_flag.set(False)
+        _set_widget_enabled(anomaly_search_checkbutton, feature_available)
+
     def _sync_bathy_source(*_args):
         src = bathy_source.get()
         if src == "estimate":
@@ -4218,6 +4281,7 @@ def gui():
             bathy_browse_btn.state(["!disabled"])
             if not bathy_path_var.get():
                 _on_bathy_browse()
+        _update_anomaly_search_availability()
 
     bathy_source.trace_add("write", _sync_bathy_source)
     _sync_bathy_source()  # apply initial state
@@ -4558,9 +4622,11 @@ def gui():
                             "max_lat": float(max_lat_text),
                         }
                     loaded_mask_path = _resolve_bundled_resource(cwd, _xml_find_text(xml_root, "crop_mask_path", "") or "")
+                    loaded_mask_buffer_m = _xml_find_text(xml_root, "crop_mask_buffer_m")
                     _set_crop_selection({
                         "bbox": bbox,
                         "mask_path": loaded_mask_path,
+                        "mask_buffer_m": float(loaded_mask_buffer_m) if loaded_mask_buffer_m not in (None, "") else None,
                         "source_path": loaded_images[0] if loaded_images else _xml_find_text(xml_root, "crop_source_image", ""),
                     })
                 except Exception:
@@ -4743,6 +4809,10 @@ def gui():
         compiled_siop_candidate = build_current_siop()
         compiled_sensor_candidate = build_current_sensor()
         pmin_values, pmax_values = _current_parameter_bounds()
+        anomaly_search_enabled = (
+            bool(anomaly_search_flag.get())
+            and _anomaly_search_available_for_bathy_source(bathy_source.get())
+        )
         current_bathy_path = ""
         bathy_reference = "depth"
         bathy_correction_m = 0.0
@@ -4773,7 +4843,7 @@ def gui():
             "fully_relaxed": bool(fully_relaxed_flag.get()),
             "output_modeled_reflectance": bool(output_modeled_reflectance_flag.get()),
             "anomaly_search_settings": {
-                "enabled": bool(anomaly_search_flag.get()),
+                "enabled": anomaly_search_enabled,
                 **copy.deepcopy(anomaly_search_settings),
             },
             "post_processing": bool(pp.get()),
@@ -4952,6 +5022,10 @@ def gui():
                 bbox = crop["bbox"]
                 add("Input", "Crop longitude", f"{bbox.get('min_lon', '')} to {bbox.get('max_lon', '')}")
                 add("Input", "Crop latitude", f"{bbox.get('min_lat', '')} to {bbox.get('max_lat', '')}")
+            if crop.get("mask_path"):
+                add("Input", "Crop mask", crop.get("mask_path", ""))
+                if crop.get("mask_buffer_m") not in (None, ""):
+                    add("Input", "Crop point buffer (m)", crop.get("mask_buffer_m", ""))
             add("Input", "Deep-water priors", bool(version.get("deep_water_selection")))
             add("Input", "Deep-water mean +/- sd bounds", version.get("deep_water_use_sd_bounds", False))
 
@@ -5270,6 +5344,7 @@ def gui():
             "crop_min_lat": float(version_crop["bbox"]["min_lat"]) if version_crop and version_crop.get("bbox") else "",
             "crop_max_lat": float(version_crop["bbox"]["max_lat"]) if version_crop and version_crop.get("bbox") else "",
             "crop_mask_path": str(version_crop.get("mask_path", "")) if version_crop else "",
+            "crop_mask_buffer_m": float(version_crop["mask_buffer_m"]) if version_crop and version_crop.get("mask_buffer_m") not in (None, "") else "",
             "crop_source_image": str(version_crop.get("source_path", "")) if version_crop else "",
             "deep_water_enabled": bool(version_deep_water),
             "deep_water_use_sd_bounds": bool(version.get("deep_water_use_sd_bounds", False)),

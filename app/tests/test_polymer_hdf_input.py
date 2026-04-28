@@ -11,6 +11,12 @@ import gui_swampy
 import image_io
 
 
+def test_anomaly_search_is_only_available_for_estimated_bathymetry():
+    assert gui_swampy._anomaly_search_available_for_bathy_source("estimate")
+    assert not gui_swampy._anomaly_search_available_for_bathy_source("emodnet")
+    assert not gui_swampy._anomaly_search_available_for_bathy_source("user")
+
+
 def _write_polymer_style_hdf(path):
     with Dataset(path, "w", format="NETCDF4") as dataset:
         dataset.createDimension("row", 4)

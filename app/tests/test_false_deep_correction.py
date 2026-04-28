@@ -46,6 +46,166 @@ def test_normalise_anomaly_search_settings_ignores_legacy_false_deep_keys():
     assert settings == swampy.DEFAULT_ANOMALY_SEARCH_SETTINGS
 
 
+def test_finalise_anomaly_search_settings_disables_with_input_bathymetry():
+    settings = swampy._finalise_anomaly_search_settings(
+        {
+            "enabled": True,
+            "export_local_moran_raster": True,
+            "export_suspicious_binary_raster": True,
+        },
+        use_input_bathy=True,
+    )
+
+    assert settings == {
+        "enabled": False,
+        "export_local_moran_raster": True,
+        "export_suspicious_binary_raster": True,
+        "export_interpolated_rasters": False,
+    }
+
+
+def test_build_batch_run_settings_csv_only_keeps_varying_columns():
+    records = [
+        {
+            "run_version_index": 1,
+            "run_version_label": "Settings 01",
+            "run_version_suffix": "_settings01",
+            "run_version_output_folder": "out/settings01",
+            "output_format": "both",
+            "post_processing": False,
+            "output_modeled_reflectance": False,
+            "allow_split": False,
+            "split_chunk_rows": "",
+            "nedr_mode": "fixed",
+            "crop_selection": None,
+            "deep_water_selection": None,
+            "siop_popup": {
+                "template_source": "template_a.xml",
+                "selected_targets": ["Sand"],
+            },
+            "sensor_popup": {
+                "sensor_name": "Sentinel-2",
+                "selected_band_count": 5,
+            },
+            "pmin": [0.01, 0.0005, 0.2, 0.1, 0.0, 0.0, 0.0],
+            "pmax": [0.16, 0.01, 1.5, 20.0, 1.0, 1.0, 1.0],
+            "rrs_flag": True,
+            "reflectance_input": False,
+            "relaxed": False,
+            "fully_relaxed": False,
+            "shallow": False,
+            "optimize_initial_guesses": False,
+            "use_five_initial_guesses": False,
+            "initial_guess_debug": False,
+            "use_bathy": False,
+            "bathy_path": "",
+            "bathy_reference": "depth",
+            "bathy_correction_m": 0.0,
+            "bathy_tolerance_m": 0.0,
+            "anomaly_search_settings": {
+                "enabled": False,
+                "export_local_moran_raster": False,
+            },
+        },
+        {
+            "run_version_index": 2,
+            "run_version_label": "Settings 02",
+            "run_version_suffix": "_settings02",
+            "run_version_output_folder": "out/settings02",
+            "output_format": "netcdf",
+            "post_processing": False,
+            "output_modeled_reflectance": False,
+            "allow_split": True,
+            "split_chunk_rows": "256",
+            "nedr_mode": "fixed",
+            "crop_selection": None,
+            "deep_water_selection": None,
+            "siop_popup": {
+                "template_source": "template_a.xml",
+                "selected_targets": ["Sand"],
+            },
+            "sensor_popup": {
+                "sensor_name": "Sentinel-2",
+                "selected_band_count": 5,
+            },
+            "pmin": [0.01, 0.0005, 0.2, 0.1, 0.0, 0.0, 0.0],
+            "pmax": [0.16, 0.01, 1.5, 30.0, 1.0, 1.0, 1.0],
+            "rrs_flag": True,
+            "reflectance_input": False,
+            "relaxed": False,
+            "fully_relaxed": False,
+            "shallow": False,
+            "optimize_initial_guesses": False,
+            "use_five_initial_guesses": False,
+            "initial_guess_debug": False,
+            "use_bathy": False,
+            "bathy_path": "",
+            "bathy_reference": "depth",
+            "bathy_correction_m": 0.0,
+            "bathy_tolerance_m": 0.0,
+            "anomaly_search_settings": {
+                "enabled": False,
+                "export_local_moran_raster": False,
+            },
+        },
+    ]
+
+    fieldnames, rows = swampy._build_batch_run_settings_csv(records)
+
+    assert fieldnames[:4] == [
+        "run_version_index",
+        "run_version_label",
+        "run_version_suffix",
+        "run_version_output_folder",
+    ]
+    assert "output_format" in fieldnames
+    assert "allow_split" in fieldnames
+    assert "split_chunk_rows" in fieldnames
+    assert "pmax_depth" in fieldnames
+    assert "post_processing" not in fieldnames
+    assert "sensor_sensor_name" not in fieldnames
+    assert rows[0]["run_version_label"] == "Settings 01"
+    assert rows[1]["output_format"] == "netcdf"
+    assert rows[0]["allow_split"] == "no"
+    assert rows[1]["allow_split"] == "yes"
+
+
+def test_resolve_batch_run_root_dir_uses_common_parent_for_version_folders(tmp_path):
+    root_dir = tmp_path / "batch_output"
+    settings01_dir = root_dir / "settings01"
+    settings02_dir = root_dir / "settings02"
+
+    result = swampy._resolve_batch_run_root_dir(
+        [str(settings01_dir), str(settings02_dir)],
+        fallback_dir=str(settings01_dir),
+    )
+
+    assert result == str(root_dir.resolve())
+
+
+def test_parse_crop_selection_preserves_point_buffer():
+    selection = swampy._parse_crop_selection({
+        "crop_enabled": True,
+        "crop_min_lon": "1.0",
+        "crop_max_lon": "2.0",
+        "crop_min_lat": "3.0",
+        "crop_max_lat": "4.0",
+        "crop_mask_path": "points.shp",
+        "crop_mask_buffer_m": "75",
+    })
+
+    assert selection == {
+        "bbox": {
+            "min_lon": 1.0,
+            "max_lon": 2.0,
+            "min_lat": 3.0,
+            "max_lat": 4.0,
+        },
+        "mask_path": "points.shp",
+        "mask_buffer_m": 75.0,
+    }
+
+
 def test_anomaly_search_persistence_keys_replace_false_deep_keys():
     launch_source = (APP_DIR / "launch_swampy.py").read_text(encoding="utf-8")
     gui_source = (APP_DIR / "gui_swampy.py").read_text(encoding="utf-8")

@@ -7,12 +7,13 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from tkinter import Tk
+import tkinter as tk
+from tkinter import Tk, messagebox, ttk
 from tkinter.filedialog import askopenfilename
 from urllib.parse import urlparse
 
 
-def _load_vector_mask_geometries(path):
+def _load_vector_mask_geometries(path, point_buffer_m=50.0):
     import fiona
     from rasterio.warp import transform_geom
     from shapely.geometry import mapping, shape
@@ -38,13 +39,182 @@ def _load_vector_mask_geometries(path):
             geometry = feature.get("geometry")
             if not geometry:
                 continue
-            geometries.append(_transform_with_optional_point_buffer(geometry, src_crs, "EPSG:4326"))
+            geometries.append(_transform_with_optional_point_buffer(
+                geometry,
+                src_crs,
+                "EPSG:4326",
+                point_buffer_m=point_buffer_m,
+            ))
     if not geometries:
         raise RuntimeError("The shapefile does not contain any valid geometry.")
     return geometries
 
 
-def _choose_mask_file():
+def _inspect_vector_mask_file(path):
+    import fiona
+    from rasterio.warp import transform_geom
+    from shapely.geometry import box, mapping, shape
+
+    geometry_types = set()
+    with fiona.open(path, "r") as src:
+        src_crs = src.crs_wkt or src.crs
+        if not src_crs:
+            raise RuntimeError("The shapefile has no CRS information.")
+
+        bbox_geometry = transform_geom(src_crs, "EPSG:4326", mapping(box(*src.bounds)), precision=8)
+        min_lon, min_lat, max_lon, max_lat = shape(bbox_geometry).bounds
+        bbox = {
+            "min_lon": float(min_lon),
+            "max_lon": float(max_lon),
+            "min_lat": float(min_lat),
+            "max_lat": float(max_lat),
+        }
+
+        has_geometry = False
+        for feature in src:
+            geometry = feature.get("geometry")
+            if not geometry:
+                continue
+            has_geometry = True
+            geom_type = str(geometry.get("type") or "").strip()
+            if geom_type:
+                geometry_types.add(geom_type)
+
+    if not has_geometry:
+        raise RuntimeError("The shapefile does not contain any valid geometry.")
+
+    return {
+        "bbox": bbox,
+        "geometry_types": geometry_types,
+        "point_only": bool(geometry_types) and geometry_types.issubset({"Point", "MultiPoint"}),
+    }
+
+
+def _choose_point_mask_mode(parent, default_buffer_m=50.0):
+    parent_is_visible = False
+    if parent is not None:
+        try:
+            parent_is_visible = str(parent.state()).lower() not in {"withdrawn", "iconic"}
+        except Exception:
+            parent_is_visible = False
+
+    dialog = tk.Toplevel(parent if parent_is_visible else None)
+    dialog.title("Point Shapefile Options")
+    if parent_is_visible:
+        dialog.transient(parent)
+    dialog.resizable(False, False)
+    dialog.attributes("-topmost", True)
+
+    choice_var = tk.StringVar(value="buffer")
+    buffer_var = tk.StringVar(value=f"{float(default_buffer_m):g}")
+    result = {"value": None}
+
+    container = ttk.Frame(dialog, padding=14)
+    container.grid(row=0, column=0, sticky="nsew")
+    container.columnconfigure(0, weight=1)
+
+    ttk.Label(
+        container,
+        text=(
+            "This shapefile contains point geometries.\n\n"
+            "Choose whether to crop around each point using a buffer, or to use the "
+            "overall shapefile extent as a bounding box."
+        ),
+        justify="left",
+        wraplength=420,
+    ).grid(row=0, column=0, sticky="w")
+
+    ttk.Radiobutton(
+        container,
+        text="Use exact point locations with a buffer",
+        variable=choice_var,
+        value="buffer",
+    ).grid(row=1, column=0, sticky="w", pady=(12, 2))
+
+    buffer_frame = ttk.Frame(container)
+    buffer_frame.grid(row=2, column=0, sticky="ew", padx=(24, 0))
+    ttk.Label(buffer_frame, text="Buffer around each point (m)").grid(row=0, column=0, sticky="w")
+    buffer_entry = ttk.Entry(buffer_frame, textvariable=buffer_var, width=12)
+    buffer_entry.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+    ttk.Radiobutton(
+        container,
+        text="Use shapefile extent as a bounding-box crop",
+        variable=choice_var,
+        value="bbox",
+    ).grid(row=3, column=0, sticky="w", pady=(12, 0))
+
+    def _refresh_buffer_controls(*_args):
+        state = "normal" if choice_var.get() == "buffer" else "disabled"
+        buffer_entry.configure(state=state)
+
+    def _accept():
+        if choice_var.get() == "buffer":
+            buffer_text = str(buffer_var.get()).strip()
+            try:
+                buffer_m = float(buffer_text)
+            except (TypeError, ValueError):
+                messagebox.showerror(
+                    "Invalid buffer size",
+                    "Enter a valid numeric buffer size in meters.",
+                    parent=dialog,
+                )
+                buffer_entry.focus_set()
+                return
+            if buffer_m <= 0.0:
+                messagebox.showerror(
+                    "Invalid buffer size",
+                    "The buffer size must be greater than 0 meters.",
+                    parent=dialog,
+                )
+                buffer_entry.focus_set()
+                return
+            result["value"] = {
+                "mode": "geometry",
+                "mask_buffer_m": buffer_m,
+            }
+        else:
+            result["value"] = {
+                "mode": "bbox",
+                "mask_buffer_m": None,
+            }
+        dialog.destroy()
+
+    def _cancel():
+        result["value"] = None
+        dialog.destroy()
+
+    actions = ttk.Frame(container)
+    actions.grid(row=4, column=0, sticky="e", pady=(14, 0))
+    ttk.Button(actions, text="Cancel", command=_cancel).grid(row=0, column=0, padx=(0, 8))
+    ttk.Button(actions, text="OK", command=_accept).grid(row=0, column=1)
+
+    dialog.protocol("WM_DELETE_WINDOW", _cancel)
+    choice_var.trace_add("write", _refresh_buffer_controls)
+    _refresh_buffer_controls()
+
+    dialog.update_idletasks()
+    width = dialog.winfo_width()
+    height = dialog.winfo_height()
+    screen_width = dialog.winfo_screenwidth()
+    screen_height = dialog.winfo_screenheight()
+    x_pos = max((screen_width - width) // 2, 0)
+    y_pos = max((screen_height - height) // 2, 0)
+    dialog.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
+    dialog.deiconify()
+    dialog.lift()
+    try:
+        dialog.wait_visibility()
+    except Exception:
+        pass
+    dialog.grab_set()
+    dialog.focus_force()
+
+    dialog.wait_window()
+    return result["value"]
+
+
+def _choose_mask_file(default_point_buffer_m=50.0):
     dialog_root = Tk()
     dialog_root.withdraw()
     dialog_root.attributes("-topmost", True)
@@ -54,9 +224,35 @@ def _choose_mask_file():
             title="Choose shapefile mask",
             filetypes=[("Shapefile", "*.shp"), ("All files", "*.*")],
         )
+        if not path:
+            return None
+        inspection = _inspect_vector_mask_file(path)
+        if inspection.get("point_only"):
+            point_options = _choose_point_mask_mode(
+                dialog_root,
+                default_buffer_m=default_point_buffer_m,
+            )
+            if not point_options:
+                return None
+            if point_options.get("mode") == "bbox":
+                return {
+                    "path": path,
+                    "mode": "bbox",
+                    "bbox": inspection.get("bbox"),
+                    "mask_buffer_m": None,
+                }
+            return {
+                "path": path,
+                "mode": "geometry",
+                "mask_buffer_m": point_options.get("mask_buffer_m"),
+            }
+        return {
+            "path": path,
+            "mode": "geometry",
+            "mask_buffer_m": None,
+        }
     finally:
         dialog_root.destroy()
-    return path
 
 
 def _build_html(payload):
@@ -228,6 +424,11 @@ def _build_html(payload):
     const hasLeafletDraw = typeof L.Draw !== 'undefined' && L.Draw && L.Draw.Event;
     let currentBBox = payload.selection && payload.selection.bbox ? payload.selection.bbox : null;
     let currentMaskPath = payload.selection && payload.selection.mask_path ? payload.selection.mask_path : '';
+    let currentMaskBuffer = null;
+    if (payload.selection && payload.selection.mask_buffer_m !== null && payload.selection.mask_buffer_m !== undefined && payload.selection.mask_buffer_m !== '') {{
+      const parsedMaskBuffer = Number(payload.selection.mask_buffer_m);
+      currentMaskBuffer = Number.isFinite(parsedMaskBuffer) && parsedMaskBuffer > 0 ? parsedMaskBuffer : null;
+    }}
     let currentMaskGeometries = payload.selection && payload.selection.mask_geometries ? payload.selection.mask_geometries : [];
     let currentPolygons = payload.selection && Array.isArray(payload.selection.polygons) ? payload.selection.polygons : [];
 
@@ -307,6 +508,16 @@ def _build_html(payload):
       }}).then(response => response.json());
     }}
 
+    function formatBufferMeters(value) {{
+      if (!Number.isFinite(value) || value <= 0) {{
+        return '';
+      }}
+      if (Math.abs(value - Math.round(value)) < 1e-9) {{
+        return String(Math.round(value));
+      }}
+      return value.toFixed(3).replace(/\\.?0+$/, '');
+    }}
+
     function formatSummary() {{
       const parts = [];
       if (currentBBox) {{
@@ -324,7 +535,11 @@ def _build_html(payload):
       }}
       if (currentMaskPath) {{
         const split = currentMaskPath.split(/[/\\\\]/);
-        parts.push(`Mask ${{split[split.length - 1]}}`);
+        let maskText = `Mask ${{split[split.length - 1]}}`;
+        if (Number.isFinite(currentMaskBuffer) && currentMaskBuffer > 0) {{
+          maskText += ` (buffer ${{formatBufferMeters(currentMaskBuffer)}} m)`;
+        }}
+        parts.push(maskText);
       }}
       if (currentPolygons.length) {{
         parts.push(`${{currentPolygons.length}} polygon(s)`);
@@ -422,13 +637,14 @@ def _build_html(payload):
       polygonsFromGroup();
     }}
 
-    function setMask(geometries, path) {{
+    function setMask(geometries, path, bufferMeters) {{
       if (maskLayer) {{
         map.removeLayer(maskLayer);
         maskLayer = null;
       }}
       currentMaskGeometries = geometries || [];
       currentMaskPath = path || '';
+      currentMaskBuffer = Number.isFinite(bufferMeters) && Number(bufferMeters) > 0 ? Number(bufferMeters) : null;
       if (currentMaskGeometries.length) {{
         maskLayer = L.geoJSON(currentMaskGeometries, {{
           style: function() {{
@@ -529,7 +745,9 @@ def _build_html(payload):
       if (!allowMaskImport) {{
         return;
       }}
-      const response = await postJson('/choose-mask', {{}});
+      const response = await postJson('/choose-mask', {{
+        current_mask_buffer_m: currentMaskBuffer
+      }});
       if (!response || response.cancelled) {{
         return;
       }}
@@ -537,11 +755,16 @@ def _build_html(payload):
         window.alert(response.error || 'Unable to load the selected shapefile.');
         return;
       }}
-      setMask(response.geometries || [], response.path || '');
+      if (response.mode === 'bbox' && response.bbox) {{
+        setMask([], '', null);
+        setRectangle(response.bbox);
+        return;
+      }}
+      setMask(response.geometries || [], response.path || '', response.mask_buffer_m);
     }});
 
     document.getElementById('clear-mask-btn').addEventListener('click', function() {{
-      setMask([], '');
+      setMask([], '', null);
     }});
 
     function configureToolbar() {{
@@ -564,6 +787,7 @@ def _build_html(payload):
       await postJson('/accept', {{
         bbox: currentBBox,
         mask_path: currentMaskPath,
+        mask_buffer_m: currentMaskBuffer,
         polygons: currentPolygons
       }});
       document.body.innerHTML = '<p style="font-family: Segoe UI, sans-serif; padding: 24px;">Selection saved. You can close this tab.</p>';
@@ -581,7 +805,7 @@ def _build_html(payload):
       formatSummary();
     }}
     if (currentMaskGeometries.length) {{
-      setMask(currentMaskGeometries, currentMaskPath);
+      setMask(currentMaskGeometries, currentMaskPath, currentMaskBuffer);
     }}
     if (currentPolygons.length) {{
       setPolygons(currentPolygons);
@@ -692,16 +916,42 @@ def _make_handler(payload, response_path, stop_event, preview_image_path):
             except Exception:
                 data = {}
             if parsed.path == "/choose-mask":
-                path = _choose_mask_file()
-                if not path:
+                default_buffer_m = data.get("current_mask_buffer_m")
+                try:
+                    default_buffer_m = float(default_buffer_m)
+                except (TypeError, ValueError):
+                    default_buffer_m = 50.0
+                selection = _choose_mask_file(default_point_buffer_m=default_buffer_m)
+                if not selection:
                     self._send_json({"ok": False, "cancelled": True})
                     return
+                if selection.get("mode") == "bbox":
+                    self._send_json({
+                        "ok": True,
+                        "mode": "bbox",
+                        "bbox": selection.get("bbox"),
+                        "path": "",
+                        "geometries": [],
+                        "mask_buffer_m": None,
+                    })
+                    return
+                path = selection.get("path")
+                point_buffer_m = selection.get("mask_buffer_m")
                 try:
-                    geometries = _load_vector_mask_geometries(path)
+                    geometries = _load_vector_mask_geometries(
+                        path,
+                        point_buffer_m=50.0 if point_buffer_m in (None, "") else float(point_buffer_m),
+                    )
                 except Exception as exc:
                     self._send_json({"ok": False, "error": str(exc)})
                     return
-                self._send_json({"ok": True, "path": path, "geometries": geometries})
+                self._send_json({
+                    "ok": True,
+                    "mode": "geometry",
+                    "path": path,
+                    "geometries": geometries,
+                    "mask_buffer_m": point_buffer_m,
+                })
                 return
             if parsed.path == "/accept":
                 with open(response_path, "w", encoding="utf-8") as response_file:
