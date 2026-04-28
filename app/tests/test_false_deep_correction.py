@@ -202,6 +202,28 @@ def test_bundled_paper_siop_defaults_match_reference_parameterization():
     assert root.findtext("x_nap_lambda0x") == "0.0054"
 
 
+def test_bundled_default_phyto_absorption_matches_ciotti_spectrum():
+    template_path = APP_DIR.parent / "Data" / "Templates" / "new_input_sub.xml"
+    root = ET.parse(template_path).getroot()
+
+    a_ph_star = root.find("a_ph_star")
+    assert a_ph_star is not None
+
+    wavelength_items = a_ph_star.findall("./item[1]/item")
+    value_items = a_ph_star.findall("./item[2]/item")
+    wavelengths = [float(item.text) for item in wavelength_items]
+    values = [float(item.text) for item in value_items]
+
+    assert len(wavelengths) == 301
+    assert len(values) == 301
+    assert wavelengths[0] == 400.0
+    assert wavelengths[-1] == 700.0
+    assert values[0] == pytest.approx(0.024396194)
+    assert values[50] == pytest.approx(0.032789242)
+    assert values[150] == pytest.approx(0.006364135)
+    assert values[-1] == pytest.approx(0.001328027)
+
+
 def test_gui_default_water_column_bounds_match_paper_defaults():
     gui_source = (APP_DIR / "gui_swampy.py").read_text(encoding="utf-8")
 
