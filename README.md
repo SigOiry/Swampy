@@ -22,7 +22,7 @@ Depending on the options enabled, the workflow can also export modeled reflectan
 
 The main folders in this repository are:
 
-- `Swampy_paralell/`: main code, GUI, launcher, inversion core, tests
+- `app/`: main code, GUI, launcher, inversion core, tests
 - `Data/SRF/`: bundled sensor templates
 - `Data/spectral_library/`: persistent benthic spectral library used by the GUI
 - `Data/Bathy/`: bundled EMOD bathymetry
@@ -31,7 +31,7 @@ The main folders in this repository are:
 
 Keep this folder structure unchanged. The GUI expects these relative paths.
 
-## 🧰 Requirements
+## 🧰 Installation and updates
 
 The recommended setup uses Git plus Conda and the provided environment file.
 
@@ -50,8 +50,10 @@ If the repository is already on your machine, you can start directly from the en
 conda env create -f environment.yml
 conda activate SwampySim
 ```
+The app have an auto-updater. When `python launch_swampy.py` is executed, the app look if the local version match the onmy version of this repository. If not a popup ask the user if he wants to update the app.
+This feature might need git and conda to global variable of the system (PATH).
 
-If the environment already exists and you want to refresh it:
+If updater doesn't work for you or if the environment already exists and you want to refresh it:
 
 ```powershell
 conda env update -f environment.yml --prune
@@ -62,7 +64,7 @@ conda activate SwampySim
 From the repository root:
 
 ```powershell
-python Swampy_paralell/launch_swampy.py
+python launch_swampy.py
 ```
 
 This opens the graphical interface.
@@ -70,7 +72,7 @@ This opens the graphical interface.
 You can also rerun a saved configuration directly from a log XML:
 
 ```powershell
-python Swampy_paralell/launch_swampy.py -f path\\to\\log_file.xml
+python launch_swampy.py -f path\\to\\log_file.xml
 ```
 
 Useful optional command-line overrides:
@@ -207,7 +209,7 @@ The repository includes sample scenes and validation resources in `Data/Test/`.
 There is also a validation helper script:
 
 ```powershell
-python Swampy_paralell/validate_swampy_cover.py --help
+python app/validate_swampy_cover.py --help
 ```
 
 This script compares SWAMpy substrate outputs against point-based ground truth.
