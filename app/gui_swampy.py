@@ -49,6 +49,14 @@ PLOT_COLORS = [
 ]
 
 _SENTINEL_RGB_PREVIEW_MAX_PIXELS = 8_000_000
+_HIDDEN_SIOP_UI_KEYS = {"a_cdom_lambda0cdom", "water_refractive_index"}
+
+
+def _visible_siop_scalar_fields():
+    return [
+        field for field in siop_config.SIOP_SCALAR_FIELDS
+        if field[0] not in _HIDDEN_SIOP_UI_KEYS
+    ]
 
 
 def _xml_find_text(node, path, default=None):
@@ -3650,13 +3658,14 @@ def gui():
         scalar_vars = {}
         for key, _label, _required in siop_config.SIOP_SCALAR_FIELDS:
             scalar_vars[key] = StringVar(value=local_scalar_values.get(key, ""))
+        visible_scalar_fields = _visible_siop_scalar_fields()
 
         scalar_summary_var = StringVar()
 
         def refresh_scalar_summary():
             missing_required = []
             invalid_values = []
-            for key, label, required in siop_config.SIOP_SCALAR_FIELDS:
+            for key, label, required in visible_scalar_fields:
                 text = scalar_vars[key].get().strip()
                 if not text:
                     if required:
@@ -3671,19 +3680,19 @@ def gui():
             elif missing_required:
                 scalar_summary_var.set(f"{len(missing_required)} required numeric parameter(s) are empty.")
             else:
-                scalar_summary_var.set(f"{len(siop_config.SIOP_SCALAR_FIELDS)} numeric parameter(s) configured.")
+                scalar_summary_var.set(f"{len(visible_scalar_fields)} numeric parameter(s) configured.")
 
         def open_numeric_parameters_popup():
             numeric_popup = tk.Toplevel(popup)
             numeric_popup.title("Water & Bottom Numeric Parameters")
             apply_window_size(
                 numeric_popup,
-                preferred_size=(980, 520),
-                minsize=(820, 420),
-                width_ratio=0.72,
-                height_ratio=0.54,
-                max_width_ratio=0.82,
-                max_height_ratio=0.68,
+                preferred_size=(1080, 700),
+                minsize=(920, 560),
+                width_ratio=0.78,
+                height_ratio=0.7,
+                max_width_ratio=0.86,
+                max_height_ratio=0.8,
             )
             numeric_popup.transient(popup)
             numeric_popup.grab_set()
@@ -3698,45 +3707,96 @@ def gui():
 
             container = ttk.Frame(numeric_popup, padding=12)
             container.grid(row=0, column=0, sticky="nsew")
-            for column_index in range(4):
-                container.columnconfigure(column_index, weight=1 if column_index in (1, 3) else 0)
-            container.rowconfigure(8, weight=1)
+            container.columnconfigure(0, weight=1)
+            container.rowconfigure(1, weight=1)
 
             ttk.Label(
                 container,
-                text="These values control the water IOP and backscattering model used by the inversion.",
+                text=(
+                    "These values control the scalar water-column IOP and backscattering model used by the inversion. "
+                    "The spectral curves for pure-water absorption and chlorophyll absorption are edited in the "
+                    "\"Modify absorption of chl and water\" popup."
+                ),
                 justify="left",
-                wraplength=780,
-            ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+                wraplength=940,
+            ).grid(row=0, column=0, sticky="w", pady=(0, 10))
 
-            for idx, (key, label, required) in enumerate(siop_config.SIOP_SCALAR_FIELDS):
-                row = 1 + idx // 2
-                col = (idx % 2) * 2
-                label_text = f"{label}{' *' if required else ''}"
+            field_specs = {
+                key: {"label": label, "required": required}
+                for key, label, required in visible_scalar_fields
+            }
+            field_groups = [
+                {
+                    "title": "Water Properties",
+                    "description": "Global water constants used across the forward model.",
+                    "keys": ("bb_lambda_ref",),
+                },
+                {
+                    "title": "CDOM Absorption",
+                    "description": "Reference wavelength and slope used for the CDOM absorption shape.",
+                    "keys": ("lambda0cdom", "a_cdom_slope"),
+                },
+                {
+                    "title": "NAP Absorption",
+                    "description": "Reference wavelength, slope, and specific absorption for NAP.",
+                    "keys": ("lambda0nap", "a_nap_slope", "a_nap_lambda0nap"),
+                },
+                {
+                    "title": "Particle Backscattering",
+                    "description": "Shared backscattering reference wavelength plus phytoplankton and NAP terms.",
+                    "keys": ("lambda0x", "bb_ph_slope", "x_ph_lambda0x", "bb_nap_slope", "x_nap_lambda0x"),
+                },
+            ]
+
+            groups_frame = ttk.Frame(container)
+            groups_frame.grid(row=1, column=0, sticky="nsew")
+            groups_frame.columnconfigure(0, weight=1)
+            groups_frame.columnconfigure(1, weight=1)
+            groups_frame.rowconfigure(0, weight=1)
+            groups_frame.rowconfigure(1, weight=1)
+
+            def create_field_group(parent, group_spec, row, column):
+                group_frame = ttk.Labelframe(parent, text=group_spec["title"], padding=10)
+                group_frame.grid(row=row, column=column, sticky="nsew", padx=4, pady=4)
+                group_frame.columnconfigure(1, weight=1)
+
                 ttk.Label(
-                    container,
-                    text=label_text,
+                    group_frame,
+                    text=group_spec["description"],
                     justify="left",
-                    wraplength=250,
-                ).grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else 18, 6), pady=3)
-                ttk.Entry(
-                    container,
-                    textvariable=draft_vars[key],
-                    justify="right",
-                    width=14,
-                ).grid(row=row, column=col + 1, sticky="ew", pady=3)
+                    wraplength=360,
+                ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+                for field_row, key in enumerate(group_spec["keys"], start=1):
+                    field_spec = field_specs[key]
+                    label_text = f"{field_spec['label']}{' *' if field_spec['required'] else ''}"
+                    ttk.Label(
+                        group_frame,
+                        text=label_text,
+                        justify="left",
+                        wraplength=250,
+                    ).grid(row=field_row, column=0, sticky="w", padx=(0, 8), pady=3)
+                    ttk.Entry(
+                        group_frame,
+                        textvariable=draft_vars[key],
+                        justify="right",
+                        width=14,
+                    ).grid(row=field_row, column=1, sticky="ew", pady=3)
+
+            create_field_group(groups_frame, field_groups[0], row=0, column=0)
+            create_field_group(groups_frame, field_groups[1], row=0, column=1)
+            create_field_group(groups_frame, field_groups[2], row=1, column=0)
+            create_field_group(groups_frame, field_groups[3], row=1, column=1)
 
             ttk.Label(container, text="* Required", foreground="#555").grid(
-                row=8,
+                row=2,
                 column=0,
-                columnspan=4,
-                sticky="sw",
+                sticky="w",
                 pady=(8, 0),
             )
             ttk.Label(container, textvariable=status_var, foreground="red").grid(
-                row=9,
+                row=3,
                 column=0,
-                columnspan=4,
                 sticky="w",
                 pady=(6, 0),
             )
@@ -3754,7 +3814,7 @@ def gui():
                 numeric_popup.destroy()
 
             numeric_actions = ttk.Frame(container)
-            numeric_actions.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+            numeric_actions.grid(row=4, column=0, sticky="ew", pady=(12, 0))
             numeric_actions.columnconfigure(0, weight=1)
             ttk.Button(numeric_actions, text="Cancel", command=numeric_popup.destroy).grid(row=0, column=1, sticky="e", padx=(8, 0))
             ttk.Button(numeric_actions, text="Apply", command=apply_numeric_parameters).grid(row=0, column=2, sticky="e", padx=(8, 0))
@@ -4505,12 +4565,12 @@ def gui():
     ttk.Label(params_frame, text="Min").grid(row=0, column=1, sticky=W)
     ttk.Label(params_frame, text="Max").grid(row=0, column=2, sticky=W)
 
-    chl_min_var = StringVar(value="0.01")
-    chl_max_var = StringVar(value="0.16")
-    cdom_min_var = StringVar(value="0.0005")
-    cdom_max_var = StringVar(value="0.01")
-    nap_min_var = StringVar(value="0.2")
-    nap_max_var = StringVar(value="1.5")
+    chl_min_var = StringVar(value="0.4")
+    chl_max_var = StringVar(value="1.0")
+    cdom_min_var = StringVar(value="0.04")
+    cdom_max_var = StringVar(value="0.11")
+    nap_min_var = StringVar(value="1.0")
+    nap_max_var = StringVar(value="3.3")
     depth_min_var = StringVar(value="0.1")
     depth_max_var = StringVar(value="30")
     sub1_min_var = StringVar(value="0")
@@ -5243,7 +5303,7 @@ def gui():
             add("Water & bottom", "Substrate names", siop_payload.get("xml_substrate_names", []))
             add("Water & bottom", "Water absorption source", siop_payload.get("a_water_source", ""))
             add("Water & bottom", "Chlorophyll absorption source", siop_payload.get("a_ph_star_source", ""))
-            for key, label, _required in siop_config.SIOP_SCALAR_FIELDS:
+            for key, label, _required in _visible_siop_scalar_fields():
                 add("Water & bottom", label, siop_payload.get(key, ""))
 
             bound_labels = ["CHL", "CDOM", "NAP", "Depth", "Substrate 1", "Substrate 2", "Substrate 3"]

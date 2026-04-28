@@ -191,8 +191,12 @@ def forward_model(
     # Calculate derived SIOPS, based on
     # Mobley, Curtis D., 1994: Radiative Transfer in natural waters.
     bb_water = (0.00194 / 2.0) * np.power(bb_lambda_ref / wavelengths, 4.32)
+
+
     a_cdom_star = a_cdom_lambda0cdom * \
         np.exp(-a_cdom_slope * (wavelengths - lambda0cdom))
+    
+    
     a_nap_star = a_nap_lambda0nap * \
         np.exp(-a_nap_slope * (wavelengths - lambda0nap))
 

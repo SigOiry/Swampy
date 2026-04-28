@@ -21,7 +21,7 @@ SIOP_SCALAR_FIELDS = [
     ("lambda0x", "Reference wavelength for backscattering [nm]", True),
     ("x_ph_lambda0x", "Specific phytoplankton backscattering at the reference wavelength [m^2 mg^-1]", True),
     ("x_nap_lambda0x", "Specific NAP backscattering at the reference wavelength [m^2 g^-1]", True),
-    ("a_cdom_lambda0cdom", "Specific CDOM absorption at the reference wavelength [-]", True),
+    ("a_cdom_lambda0cdom", "Specific CDOM absorption at the reference wavelength [m^-1]", True),
     ("a_nap_lambda0nap", "Specific NAP absorption at the reference wavelength [m^2 g^-1]", True),
     ("bb_lambda_ref", "Reference wavelength used for pure-water backscattering [nm]", True),
     ("water_refractive_index", "Water refractive index [-]", True),

@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import numpy.ma as ma
@@ -181,6 +182,35 @@ def test_resolve_batch_run_root_dir_uses_common_parent_for_version_folders(tmp_p
     )
 
     assert result == str(root_dir.resolve())
+
+
+def test_bundled_paper_siop_defaults_match_reference_parameterization():
+    template_path = APP_DIR.parent / "Data" / "Templates" / "new_input_sub.xml"
+    root = ET.parse(template_path).getroot()
+
+    assert root.findtext("lambda0cdom") == "440.0"
+    assert root.findtext("a_cdom_slope") == "0.0157"
+    assert root.findtext("a_cdom_lambda0cdom") == "1.0"
+    assert root.findtext("lambda0nap") == "440.0"
+    assert root.findtext("a_nap_slope") == "0.0106"
+    assert root.findtext("a_nap_lambda0nap") == "0.0048"
+    assert root.findtext("bb_lambda_ref") == "500"
+    assert root.findtext("lambda0x") == "542.0"
+    assert root.findtext("bb_ph_slope") == "0.681"
+    assert root.findtext("bb_nap_slope") == "0.681"
+    assert root.findtext("x_ph_lambda0x") == "0.00038"
+    assert root.findtext("x_nap_lambda0x") == "0.0054"
+
+
+def test_gui_default_water_column_bounds_match_paper_defaults():
+    gui_source = (APP_DIR / "gui_swampy.py").read_text(encoding="utf-8")
+
+    assert 'chl_min_var = StringVar(value="0.4")' in gui_source
+    assert 'chl_max_var = StringVar(value="1.0")' in gui_source
+    assert 'cdom_min_var = StringVar(value="0.04")' in gui_source
+    assert 'cdom_max_var = StringVar(value="0.11")' in gui_source
+    assert 'nap_min_var = StringVar(value="1.0")' in gui_source
+    assert 'nap_max_var = StringVar(value="3.3")' in gui_source
 
 
 def test_parse_crop_selection_preserves_point_buffer():

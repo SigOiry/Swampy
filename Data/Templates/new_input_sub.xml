@@ -2,10 +2,10 @@
 <root>
     <a_cdom_lambda0cdom>1.0</a_cdom_lambda0cdom>
     <water_refractive_index>1.33784</water_refractive_index>
-    <lambda0cdom>550.0</lambda0cdom>
-    <x_nap_lambda0x>0.0225353</x_nap_lambda0x>
-    <x_ph_lambda0x>0.00157747</x_ph_lambda0x>
-    <bb_ph_slope>0.878138</bb_ph_slope>
+    <lambda0cdom>440.0</lambda0cdom>
+    <x_nap_lambda0x>0.0054</x_nap_lambda0x>
+    <x_ph_lambda0x>0.00038</x_ph_lambda0x>
+    <bb_ph_slope>0.681</bb_ph_slope>
     <substrates>
         <item>
             <item>
@@ -2432,9 +2432,9 @@
             </item>
         </item>
     </substrates>
-    <a_cdom_slope>0.0168052</a_cdom_slope>
-    <bb_lambda_ref>550</bb_lambda_ref>
-    <a_nap_slope>0.00977262</a_nap_slope>
+    <a_cdom_slope>0.0157</a_cdom_slope>
+    <bb_lambda_ref>500</bb_lambda_ref>
+    <a_nap_slope>0.0106</a_nap_slope>
     <a_water>
         <item>
             <item>400</item>
@@ -3443,7 +3443,7 @@
             <item>6.800474744</item>
         </item>
     </a_water>
-    <a_nap_lambda0nap>0.00433</a_nap_lambda0nap>
+    <a_nap_lambda0nap>0.0048</a_nap_lambda0nap>
     <a_ph_star>
         <item>
             <item>400</item>
@@ -4452,12 +4452,12 @@
             <item>0.0</item>
         </item>
     </a_ph_star>
-    <lambda0nap>550.0</lambda0nap>
+    <lambda0nap>440.0</lambda0nap>
     <substrate_names>
         <item>new_inputst_swam:Sargassum</item>
         <item>new_inputst_swam:100% zostera</item>
         <item>new_inputst_swam:sand</item>
     </substrate_names>
-    <bb_nap_slope>0.0054</bb_nap_slope>
-    <lambda0x>546.0</lambda0x>
+    <bb_nap_slope>0.681</bb_nap_slope>
+    <lambda0x>542.0</lambda0x>
 </root>
