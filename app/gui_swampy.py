@@ -1019,13 +1019,6 @@ def _infer_output_folder_from_output_file(output_file):
 
 
 def _draw_spectra_preview(canvas, spectral_library, selected_names, hovered_name=None):
-    canvas.delete("all")
-    width = max(canvas.winfo_width(), 620)
-    height = max(canvas.winfo_height(), 300)
-    left, top, right, bottom = 58, 18, 18, 42
-    plot_width = width - left - right
-    plot_height = height - top - bottom
-
     ordered_names = []
     for name in selected_names:
         if name in spectral_library["spectra"] and name not in ordered_names:
@@ -1034,21 +1027,87 @@ def _draw_spectra_preview(canvas, spectral_library, selected_names, hovered_name
         ordered_names.append(hovered_name)
 
     if not ordered_names:
+        _draw_line_spectra_preview(
+            canvas,
+            [],
+            empty_message="Hover a spectrum to preview it.",
+            y_axis_label="Reflectance",
+        )
+        return
+
+    series_specs = []
+    color_map = {}
+    for index, name in enumerate(selected_names):
+        color_map[name] = PLOT_COLORS[index % len(PLOT_COLORS)]
+    if hovered_name and hovered_name not in color_map:
+        color_map[hovered_name] = PLOT_COLORS[len(selected_names) % len(PLOT_COLORS)]
+
+    for name in ordered_names:
+        wavelengths, values = spectral_library["spectra"][name]
+        is_hover_only = hovered_name == name and name not in selected_names
+        series_specs.append({
+            "label": f"{name} (hover)" if is_hover_only else name,
+            "wavelengths": wavelengths,
+            "values": values,
+            "color": color_map.get(name, "#0f6cbd"),
+            "width": 3 if is_hover_only else 2,
+        })
+
+    _draw_line_spectra_preview(
+        canvas,
+        series_specs,
+        empty_message="Hover a spectrum to preview it.",
+        y_axis_label="Reflectance",
+    )
+
+
+def _draw_line_spectra_preview(canvas, series_specs, empty_message="No spectra to preview.", y_axis_label="Value"):
+    canvas.delete("all")
+    width = max(canvas.winfo_width(), 620)
+    height = max(canvas.winfo_height(), 300)
+    left, top, right, bottom = 58, 18, 18, 42
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+
+    valid_series = []
+    for index, spec in enumerate(series_specs or []):
+        wavelengths = list(spec.get("wavelengths") or [])
+        values = list(spec.get("values") or [])
+        if not wavelengths or len(wavelengths) != len(values):
+            continue
+        points = []
+        for wavelength, value in zip(wavelengths, values):
+            try:
+                x_value = float(wavelength)
+                y_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(x_value) and np.isfinite(y_value):
+                points.append((x_value, y_value))
+        if len(points) < 2:
+            continue
+        valid_series.append({
+            "label": str(spec.get("label", f"Series {index + 1}")),
+            "color": str(spec.get("color") or PLOT_COLORS[index % len(PLOT_COLORS)]),
+            "dash": spec.get("dash"),
+            "width": int(spec.get("width", 2) or 2),
+            "points": points,
+        })
+
+    if not valid_series:
         canvas.create_text(
             width / 2,
             height / 2,
-            text="Hover a spectrum to preview it.",
+            text=empty_message,
             fill="#666666",
             font=("Segoe UI", 10),
         )
         return
 
-    series = [(name, spectral_library["spectra"][name][1]) for name in ordered_names]
-    wavelengths = spectral_library["wavelengths"]
-    x_min = min(wavelengths)
-    x_max = max(wavelengths)
-    y_min = min(min(values) for _name, values in series)
-    y_max = max(max(values) for _name, values in series)
+    x_min = min(min(point[0] for point in series["points"]) for series in valid_series)
+    x_max = max(max(point[0] for point in series["points"]) for series in valid_series)
+    y_min = min(min(point[1] for point in series["points"]) for series in valid_series)
+    y_max = max(max(point[1] for point in series["points"]) for series in valid_series)
     if y_max <= y_min:
         y_max = y_min + 1.0
     padding = (y_max - y_min) * 0.05
@@ -1072,7 +1131,7 @@ def _draw_spectra_preview(canvas, spectral_library, selected_names, hovered_name
         canvas.create_text(x, top + plot_height + 16, text=f"{tick_value:.0f}", anchor="n", fill="#444444", font=("Segoe UI", 8))
 
     canvas.create_text(left + (plot_width / 2), height - 8, text="Wavelength (nm)", fill="#444444", font=("Segoe UI", 9))
-    canvas.create_text(15, top + (plot_height / 2), text="Reflectance", angle=90, fill="#444444", font=("Segoe UI", 9))
+    canvas.create_text(15, top + (plot_height / 2), text=y_axis_label, angle=90, fill="#444444", font=("Segoe UI", 9))
 
     def scale_x(value):
         if x_max == x_min:
@@ -1082,23 +1141,28 @@ def _draw_spectra_preview(canvas, spectral_library, selected_names, hovered_name
     def scale_y(value):
         return top + ((y_max - value) / (y_max - y_min) * plot_height)
 
-    color_map = {}
-    for index, name in enumerate(selected_names):
-        color_map[name] = PLOT_COLORS[index % len(PLOT_COLORS)]
-    if hovered_name and hovered_name not in color_map:
-        color_map[hovered_name] = PLOT_COLORS[len(selected_names) % len(PLOT_COLORS)]
-
     legend_y = top + 10
-    for name, values in series:
-        points = []
-        for wavelength, value in zip(wavelengths, values):
-            points.extend((scale_x(wavelength), scale_y(value)))
-        is_hover_only = hovered_name == name and name not in selected_names
-        line_width = 3 if is_hover_only else 2
-        canvas.create_line(points, fill=color_map.get(name, "#0f6cbd"), width=line_width, smooth=False)
-        canvas.create_line(left + 10, legend_y, left + 34, legend_y, fill=color_map.get(name, "#0f6cbd"), width=line_width)
-        suffix = " (hover)" if is_hover_only else ""
-        canvas.create_text(left + 42, legend_y, text=f"{name}{suffix}", anchor="w", fill="#222222", font=("Segoe UI", 9))
+    for series in valid_series:
+        flat_points = []
+        for wavelength, value in series["points"]:
+            flat_points.extend((scale_x(wavelength), scale_y(value)))
+        canvas.create_line(
+            flat_points,
+            fill=series["color"],
+            width=series["width"],
+            smooth=False,
+            dash=series["dash"],
+        )
+        canvas.create_line(
+            left + 10,
+            legend_y,
+            left + 34,
+            legend_y,
+            fill=series["color"],
+            width=series["width"],
+            dash=series["dash"],
+        )
+        canvas.create_text(left + 42, legend_y, text=series["label"], anchor="w", fill="#222222", font=("Segoe UI", 9))
         legend_y += 16
 
 
@@ -3310,21 +3374,22 @@ def gui():
             absorption_popup.title("Modify absorption of chl and water")
             apply_window_size(
                 absorption_popup,
-                preferred_size=(960, 320),
-                minsize=(780, 260),
-                width_ratio=0.72,
-                height_ratio=0.34,
-                max_width_ratio=0.8,
-                max_height_ratio=0.4,
+                preferred_size=(1180, 760),
+                minsize=(980, 620),
+                width_ratio=0.82,
+                height_ratio=0.78,
+                max_width_ratio=0.9,
+                max_height_ratio=0.88,
             )
             absorption_popup.transient(popup)
             absorption_popup.grab_set()
             absorption_popup.columnconfigure(0, weight=1)
             absorption_popup.rowconfigure(0, weight=1)
 
-            draft_paths = dict(local_spectrum_paths)
-            a_water_path_var = StringVar(value=draft_paths.get("a_water", ""))
-            a_ph_star_path_var = StringVar(value=draft_paths.get("a_ph_star", ""))
+            a_water_path_var = StringVar(value=local_spectrum_paths.get("a_water", ""))
+            a_ph_star_path_var = StringVar(value=local_spectrum_paths.get("a_ph_star", ""))
+            water_preview_status_var = StringVar()
+            chl_preview_status_var = StringVar()
 
             def choose_spectrum_csv(target_key, target_var, title_text):
                 path = askopenfilename(
@@ -3333,34 +3398,38 @@ def gui():
                     filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
                 )
                 if path:
-                    draft_paths[target_key] = path
                     target_var.set(path)
 
-            def clear_spectrum_csv(target_key, target_var):
-                draft_paths[target_key] = ""
+            def clear_spectrum_csv(_target_key, target_var):
                 target_var.set("")
 
             absorption_container = ttk.Frame(absorption_popup, padding=12)
             absorption_container.grid(row=0, column=0, sticky="nsew")
+            absorption_container.columnconfigure(0, weight=0)
             absorption_container.columnconfigure(1, weight=1)
-            absorption_container.rowconfigure(3, weight=1)
+            absorption_container.rowconfigure(0, weight=1)
+
+            form_frame = ttk.Frame(absorption_container)
+            form_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+            form_frame.columnconfigure(1, weight=1)
 
             ttk.Label(
-                absorption_container,
+                form_frame,
                 text="CSV format: wavelength, value. One header row is allowed.",
-                wraplength=820,
-            ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
+                wraplength=360,
+                justify="left",
+            ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
 
             ttk.Label(
-                absorption_container,
+                form_frame,
                 text="Absorption coefficient of pure seawater [m^-1]",
             ).grid(row=1, column=0, sticky="w")
             ttk.Entry(
-                absorption_container,
+                form_frame,
                 textvariable=a_water_path_var,
             ).grid(row=1, column=1, sticky="ew", padx=(0, 6))
             ttk.Button(
-                absorption_container,
+                form_frame,
                 text="Browse",
                 command=lambda: choose_spectrum_csv(
                     "a_water",
@@ -3369,42 +3438,177 @@ def gui():
                 ),
             ).grid(row=1, column=2, sticky="e", padx=(0, 6))
             ttk.Button(
-                absorption_container,
+                form_frame,
                 text="Default",
                 command=lambda: clear_spectrum_csv("a_water", a_water_path_var),
             ).grid(row=1, column=3, sticky="e")
 
             ttk.Label(
-                absorption_container,
+                form_frame,
                 text="Chlorophyll-specific absorption spectrum [m^2 mg^-1]",
-            ).grid(row=2, column=0, sticky="w", pady=(8, 0))
+            ).grid(row=2, column=0, sticky="w", pady=(10, 0))
             ttk.Entry(
-                absorption_container,
+                form_frame,
                 textvariable=a_ph_star_path_var,
-            ).grid(row=2, column=1, sticky="ew", padx=(0, 6), pady=(8, 0))
+            ).grid(row=2, column=1, sticky="ew", padx=(0, 6), pady=(10, 0))
             ttk.Button(
-                absorption_container,
+                form_frame,
                 text="Browse",
                 command=lambda: choose_spectrum_csv(
                     "a_ph_star",
                     a_ph_star_path_var,
                     "Choose chlorophyll-specific absorption CSV",
                 ),
-            ).grid(row=2, column=2, sticky="e", padx=(0, 6), pady=(8, 0))
+            ).grid(row=2, column=2, sticky="e", padx=(0, 6), pady=(10, 0))
             ttk.Button(
-                absorption_container,
+                form_frame,
                 text="Default",
                 command=lambda: clear_spectrum_csv("a_ph_star", a_ph_star_path_var),
-            ).grid(row=2, column=3, sticky="e", pady=(8, 0))
+            ).grid(row=2, column=3, sticky="e", pady=(10, 0))
+
+            ttk.Label(
+                form_frame,
+                text=(
+                    "The graphs compare the default spectra from the current template with your custom "
+                    "CSV, if one is selected."
+                ),
+                wraplength=360,
+                justify="left",
+            ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(14, 0))
+
+            preview_frame = ttk.Labelframe(absorption_container, text="Spectral Preview")
+            preview_frame.grid(row=0, column=1, sticky="nsew")
+            preview_frame.columnconfigure(0, weight=1)
+            preview_frame.rowconfigure(0, weight=1)
+            preview_frame.rowconfigure(1, weight=1)
+
+            water_preview_frame = ttk.Labelframe(preview_frame, text="Pure Water Absorption")
+            water_preview_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=(4, 8))
+            water_preview_frame.columnconfigure(0, weight=1)
+            water_preview_frame.rowconfigure(0, weight=1)
+
+            water_preview_canvas = tk.Canvas(
+                water_preview_frame,
+                bg="white",
+                highlightthickness=1,
+                highlightbackground="#d7d7d7",
+            )
+            water_preview_canvas.grid(row=0, column=0, sticky="nsew", padx=4, pady=(4, 4))
+            ttk.Label(
+                water_preview_frame,
+                textvariable=water_preview_status_var,
+                wraplength=620,
+                justify="left",
+            ).grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
+
+            chl_preview_frame = ttk.Labelframe(preview_frame, text="Chlorophyll-Specific Absorption")
+            chl_preview_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+            chl_preview_frame.columnconfigure(0, weight=1)
+            chl_preview_frame.rowconfigure(0, weight=1)
+
+            chl_preview_canvas = tk.Canvas(
+                chl_preview_frame,
+                bg="white",
+                highlightthickness=1,
+                highlightbackground="#d7d7d7",
+            )
+            chl_preview_canvas.grid(row=0, column=0, sticky="nsew", padx=4, pady=(4, 4))
+            ttk.Label(
+                chl_preview_frame,
+                textvariable=chl_preview_status_var,
+                wraplength=620,
+                justify="left",
+            ).grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
+
+            def build_absorption_preview_series(path_var, default_spectrum, *, default_label, custom_label,
+                                                default_color, custom_color):
+                custom_path = str(path_var.get()).strip()
+                series_specs = [{
+                    "label": default_label,
+                    "wavelengths": default_spectrum[0],
+                    "values": default_spectrum[1],
+                    "color": default_color,
+                    "width": 2,
+                }]
+                if not custom_path:
+                    return series_specs, "Showing the default template spectrum only.", None
+                try:
+                    custom_spectrum = siop_config.load_two_column_spectrum_csv(custom_path)
+                except Exception as exc:
+                    return series_specs, f"Custom preview unavailable: {exc}", str(exc)
+                custom_name = os.path.basename(custom_path) or custom_label
+                series_specs.append({
+                    "label": f"{custom_label}: {custom_name}",
+                    "wavelengths": custom_spectrum[0],
+                    "values": custom_spectrum[1],
+                    "color": custom_color,
+                    "width": 3,
+                    "dash": (8, 4),
+                })
+                return series_specs, f"Comparing the default template against {custom_name}.", None
+
+            def redraw_absorption_previews():
+                water_series, water_status, _water_error = build_absorption_preview_series(
+                    a_water_path_var,
+                    template_config["a_water"],
+                    default_label="Default template",
+                    custom_label="Custom CSV",
+                    default_color="#0f6cbd",
+                    custom_color="#cc5500",
+                )
+                _draw_line_spectra_preview(
+                    water_preview_canvas,
+                    water_series,
+                    empty_message="No pure-water absorption spectrum available.",
+                    y_axis_label="Absorption [m^-1]",
+                )
+                water_preview_status_var.set(water_status)
+
+                chl_series, chl_status, _chl_error = build_absorption_preview_series(
+                    a_ph_star_path_var,
+                    template_config["a_ph_star"],
+                    default_label="Default template",
+                    custom_label="Custom CSV",
+                    default_color="#198754",
+                    custom_color="#c50f1f",
+                )
+                _draw_line_spectra_preview(
+                    chl_preview_canvas,
+                    chl_series,
+                    empty_message="No chlorophyll absorption spectrum available.",
+                    y_axis_label="Absorption [m^2 mg^-1]",
+                )
+                chl_preview_status_var.set(chl_status)
+
+            def validate_absorption_inputs():
+                for label, path_var in (
+                    ("pure seawater absorption", a_water_path_var),
+                    ("chlorophyll-specific absorption", a_ph_star_path_var),
+                ):
+                    csv_path = str(path_var.get()).strip()
+                    if not csv_path:
+                        continue
+                    try:
+                        siop_config.load_two_column_spectrum_csv(csv_path)
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Invalid absorption spectrum",
+                            f"The selected {label} CSV is invalid.\n\n{exc}",
+                            parent=absorption_popup,
+                        )
+                        return False
+                return True
 
             def apply_absorption_changes():
+                if not validate_absorption_inputs():
+                    return
                 local_spectrum_paths["a_water"] = a_water_path_var.get().strip()
                 local_spectrum_paths["a_ph_star"] = a_ph_star_path_var.get().strip()
                 refresh_absorption_summary()
                 absorption_popup.destroy()
 
             absorption_actions = ttk.Frame(absorption_container)
-            absorption_actions.grid(row=3, column=0, columnspan=4, sticky="sew", pady=(14, 0))
+            absorption_actions.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 0))
             absorption_actions.columnconfigure(0, weight=1)
 
             ttk.Button(
@@ -3418,6 +3622,12 @@ def gui():
                 command=apply_absorption_changes,
             ).grid(row=0, column=2, sticky="e", padx=(8, 0))
 
+            a_water_path_var.trace_add("write", lambda *_args: redraw_absorption_previews())
+            a_ph_star_path_var.trace_add("write", lambda *_args: redraw_absorption_previews())
+            water_preview_canvas.bind("<Configure>", lambda _event: redraw_absorption_previews())
+            chl_preview_canvas.bind("<Configure>", lambda _event: redraw_absorption_previews())
+
+            redraw_absorption_previews()
             center_window(absorption_popup)
             absorption_popup.wait_window()
 

@@ -1,0 +1,1244 @@
+Hyperspectral remote sensing for shallow waters: 2.
+Deriving bottom depths and water properties
+by optimization
+Zhongping Lee, Kendall L. Carder, Curtis D. Mobley, Robert G. Steward, and Jennifer S. Patch
+In earlier studies of passive remote sensing of shallow-water bathymetry, bottom depths were usually
+derived by empirical regression. This approach provides rapid data processing, but it requires knowledge
+of a few true depths for the regression parameters to be determined, and it cannot reveal in-water constit-
+uents. In this study a newly developed hyperspectral, remote-sensing reﬂectance model for shallow water
+is applied to data from computer simulations and ﬁeld measurements. In the process, a remote-sensing
+reﬂectance spectrum is modeled by a set of values of absorption, backscattering, bottom albedo, and bottom
+depth; then it is compared with the spectrum from measurements. The difference between the two spectral
+curves is minimized by adjusting the model values in a predictor–corrector scheme. No information in
+addition to the measured reﬂectance is required. When the difference reaches a minimum, or the set of
+variables is optimized, absorption coefﬁcients and bottom depths along with other properties are derived
+simultaneously. For computer-simulated data at a wind speed of 5 mys the retrieval error was 5.3% for
+depths ranging from 2.0 to 20.0 m and 7.0% for total absorption coefﬁcients at 440 nm ranging from 0.04 to
+0.24 m
+21. At a wind speed of 10 m ys the errors were 5.1% for depth and 6.3% for total absorption at 440
+nm. For ﬁeld data with depths ranging from 0.8 to 25.0 m the difference was 10.9%~R2 5 0.96, N 5 37!
+between inversion-derived and ﬁeld-measured depth values and just 8.1%~N 5 33! for depths greater than
+2.0 m. These results suggest that the model and the method used in this study, which do not requirein
+situ calibration measurements, perform very well in retrieving in-water optical properties and bottom
+depths from above-surface hyperspectral measurements. © 1999 Optical Society of America
+OCIS codes: 010.4450, 280.0280.
+1. Introduction
+The signals measured by a sensor from above the
+water surface of a shallow site contain surface-
+reﬂected skylight, radiance reﬂected from the bottom,
+and path radiance from the water column. For the
+bottom depth to be retrieved, the surface-reﬂected
+light and the water-column contributions have to be
+removed, and the optical properties of the water col-
+umn have to be known or derived. In earlier
+studies
+1–8 values for water-column contributions
+were usually derived from adjacent deep waters1,2,4,9
+and light attenuation properties were assumed to be
+known a priori
+1 or empirically derived from an image
+by regression4,7 by using a few true depths provided
+by lidar9 or on-site ship measurements.
+However, the above-preferred conditions rarely ex-
+ist. First, path radiance from deep waters is not the
+same as that from the water column of shallow wa-
+ters, even if the optical properties are the same.
+8–12
+Second, for estuarine or coastal waters, the color con-
+stituents of the water can be patchy, so the optical
+properties throughout an image may not always be
+the same. Third, known depths are not always
+available for deriving the regression parameters.
+And ﬁnally, owing to land runoff and tidal inﬂuences,
+coastal water properties change rapidly. A known
+optical value from a different time may not be the
+same as when a remote sensor takes measurements.
+To overcome these obstacles, it is desirable to derive
+simultaneously bottom depths and albedo and the
+optical properties of the water column.
+In this study a newly developed semianalytical,
+remote-sensing reﬂectance R
+rs ~see Table 1 for sym-
+Z. Lee, K. L. Carder, R. G. Steward, and J. S. Patch are with the
+Department of Marine Science, University of South Florida, St.
+Petersburg, Florida 33701. The e-mail address for Z. Lee is
+zplee@monty.marine.usf.edu. C. D. Mobley is with Sequoia Sci-
+entiﬁc, Incorporated, 9725 S.E. 36th Street, Suite 308, Mercer
+Island, Washington 98040.
+Received 11 September 1998; revised manuscript received 11
+March 1999.
+0003-6935y99y183831-13$15.00y0
+© 1999 Optical Society of America
+20 June 1999 y Vol. 38, No. 18 y APPLIED OPTICS 3831
+
+bols used in this text! model ~SA-model! for shallow
+water13 was applied to both computer-simulated and
+ﬁeld-measured data. In the model, downward and
+upward diffuse attenuation coefﬁcients are explic-
+itly described as functions of the absorption and
+backscattering coefﬁcients as are the water-column
+contributions. In the derivation process a remote-
+sensing reﬂectance spectrum is simulated with the
+SA-model by introducing a set of coefﬁcients for
+absorption a, backscatteringb
+b, bottom albedor, and
+bottom depth H. Then one determines a difference
+measure by comparing the model and the measure-
+ment spectra. Using a computer program, one re-
+peats this predictor–corrector process by adjusting
+the values of a, b
+b, H, and r until the difference
+measure reaches a minimum and the values ofa, bb,
+H, and r are derived. Only then are the derived
+values compared with measured values. In the der-
+ivation only the spectral shape of the bottom albedo
+was assumed known. The albedo intensity, how-
+ever, was allowed to change from place to place. No
+information in addition to the R
+rs~l! from measure-
+ments is required in the derivation process. From
+the derived absorption coefﬁcients, concentrations of
+in-water chlorophyll-a or gelbstoff, for example, can
+be derived.
+14
+2. Modeling of Remote-Sensing Reﬂectance Rrs
+Remote-sensing reﬂectanceRrs is deﬁned as the ratio
+of the water-leaving radiance to downwelling irradi-
+ance just above the surface. R
+rs is an apparent op-
+tical property15 controlled by the absorption and the
+scattering properties of the constituents in the water,
+the bottom albedo and the bottom depth, is inﬂuenced
+by ﬂuorescence and Raman emission,
+16 and is mod-
+estly affected by the angles of solar input and output
+radiance.17 In general, for optically shallow waters
+with vertical homogeneity, and when the inelastic
+scattering contributions are ignored,
+R
+rs~l! 5 f @a~l!, b~l!, r~l!, H, uw, u, w#, (1)
+where a~l! is the absorption coefﬁcient, b~l! is the
+volume scattering function,r~l! is the bottom albedo,
+H is the bottom depth, uw is the subsurface solar
+zenith angle, u is the subsurface viewing angle from
+nadir, and w is the viewing azimuth angle from the
+solar plane. For brevity, wavelength dependence
+may not be explicitly included unless required for
+clarity.
+Recently, by use of Hydrolight 3.0,
+18 an SA model
+for nadir-viewingRrs was developed13 ~a concise over-
+view is in Appendix A!:
+Rrs < 0.5rrs
+1–1.5rrs
+, (2)
+where rrs ~the subsurface remote-sensing reﬂectance
+or the ratio of the upwelling radiance to the down-
+welling irradiance evaluated just below the surface! is
+r
+rs 5 rrs
+C 1 rrs
+B
+< rrs
+dp
+(1 2expH2 F
+1
+cos~uw! 1 Du
+C
+GkHJ)
+1 1
+p r expH2F
+1
+cos~uw! 1 Du
+B
+GkHJ, (3)
+Table 1. Symbols
+Symbols Description Units
+aw Absorption coefﬁcient of pure water m 21
+af Absorption coefﬁcient of phytoplankton pigments m 21
+ag Absorption coefﬁcient of gelbstoff m 21
+a Absorption coefﬁcients of the total ~5 aw 1 af 1 ag! m21
+bb Backscattering coefﬁcients m 21
+bp Scattering coefﬁcients of suspended particles m 21
+bbp Backscattering coefﬁcients of suspended particles m 21
+D Distribution function
+Ed Downwelling irradiance W ynmym2
+F~u! Surface Fresnel reﬂectance for angle u
+H Bottom depth m
+Lu Above-surface upwelling radiance W ym2ynmysr
+Lw Water-leaving radiance W ym2ynmysr
+rrs Subsurface remote-sensing reﬂectance sr 21
+rrs
+B Subsurface remote-sensing reﬂectance from bottom reﬂection sr 21
+rrs
+C Subsurface remote-sensing reﬂectance from water-column scattering sr 21
+Rrs Above-surface remote-sensing reﬂectance sr 21
+Trs Total remote-sensing reﬂectance ~5 LuyEd! sr21
+Srs Sky input ~5 LskyyEd! sr21
+@chl-a# Chlorophyll-a concentration mg ym3
+k Attenuation coefﬁcient ~5 a 1 bb! m21
+r Bottom albedo
+uw Subsurface solar zenith angle rad
+3832 APPLIED OPTICS y Vol. 38, No. 18 y 20 June 1999
+
+and rrs
+dp ~remote-sensing reﬂectance for optically
+deep water! is
+rrs
+dp < ~0.084 1 0.170u!u. (4)
+The optical path-elongation factors for scattered pho-
+tons from the water column Du
+C and bottom Du
+B are
+Du
+C < 1.03~1 1 2.4u!0.5, Du
+B < 1.04~1 1 5.4u!0.5
+(5)
+with
+u 5 bby~a 1 bb!, k 5 a 1 bb, (6)
+where19,20
+bb 5 bbw 1 bbp (7)
+a 5 aw 1 af 1 ag. (8)
+Note that bothu and k in Eqs.~6! are inherent optical
+properties,15 and the combination of Eqs. ~2!–~6!
+provides the expression for Rrs. In Eq. ~2! 0.5y~1 2
+1.5rrs! is the water-to-air divergence factor and ~1 2
+1.5rrs! accounts for the internal reﬂection of the
+water–air interface, which is important for very shal-
+low andyor very turbid waters; b
+bw is the backscat-
+tering coefﬁcient of seawater, while bbp is the
+backscattering coefﬁcient of particles.
+These equations describe the model for nadir-
+viewing sensors. However, remote sensors view the
+target at a series of angles, not just at nadir. For the
+above equations to be used for other viewing angles,
+model adjustments are necessary. It has been found,
+however, that even for case 1 waters
+21 there is no
+simple analytical function that can accurately model
+r
+rs for different viewing angles,17 especially when the
+situation is complicated by shallow and turbid waters,
+where more multiple scattering occurs.
+By ﬁtting Hydrolight-generated r
+rs values for dif-
+ferent viewing angles with empirical functionality,
+we found that Eqs. ~2!–~6! are still generally applica-
+ble if we make a slight adjustment:
+r
+rs < rrs
+dp
+(1 2 expH2F
+1
+cos~uw! 1 Du
+C
+cos~u!GkHJ)
+1 1
+p r expH2F
+1
+cos~uw! 1 Du
+B
+cos~u!GkHJ, (9)
+with bb of Eq. ~7! adjusted to
+bb9~l! 5 bbw~l! 1 ε~l!bbp~l!. (10)
+The term 1ycos~u! in Eq.~9! accounts for the increased
+path length for larger viewing angles when the up-
+welling radiance ﬁeld is not Lambertian;ε in Eq. ~10!
+is an empirical parameter to account for the effects of
+changing view angles on the effective scattering, and
+it varies with angles of solar input and radiance out-
+put. For r
+rs in the plane 90° to the solar plane, and
+to ﬁrst order, ε can be approximated as
+ε~l! < 1.0 1 @0.1 1 0.8bbp~l!ybb~l!#sin~u!sin~uw!. (11)
+Figure 1 presentsrrs data calculated with Hydrolight
+and the above SA-model for three viewing angles.
+This adjusted expression on average can explain
+Hydrolight-calculatedr
+rs values with an error of 6.1%
+for remote observations in the plane 90° to the solar
+plane. The maximum error was ;15% for cases with
+high turbidity and large viewing angles. Hence we
+limit our viewing angles to 30° from nadir at an azi-
+muth of 90° from solar plane. For more accurate for-
+ward modeling at different viewing angles, numerical
+methods such as Hydrolight or Monte Carlo are
+needed. These methods, however, are slow and not
+appropriate for real-time applications. For the fol-
+lowing inversion calculations the above model@approx-
+imation~9!# will be applied to computer-simulated and
+ﬁeld-measured data, and the deriveda and H values
+will be compared with actual values.
+3. Inversion Method
+A. General Description
+A remote sensor located above the water surface mea-
+sures the total upwelling radiance, not the remote-
+sensing reﬂectance. We thus derive the properties of
+the water body from the total remote-sensing reﬂec-
+tance T
+rs, which is the ratio of the total upwelling
+radiance at some observation angle ~uv, wv! to the
+downwelling irradiance above the surface. Above-
+surface downwelling irradiance can be easily mea-
+sured or accurately calculated from existing models.
+22
+Trs and Srs ~sky input! are deﬁned as23
+Trs 5 Lu
+Ed
+, Srs 5 Lsky
+Ed
+. (12)
+Trs includes Rrs, surface-reﬂected Srs, and possible
+solar-glint effects. By correcting for the reﬂected
+skylight and solar glint, we can derive R
+rs from Trs.
+Traditionally, for nonturbid waters one performed
+this correction by subtracting a fraction ~a value of
+surface Fresnel reﬂectance! of S
+rs from Trs and then
+by adjusting for sun glint by biasing the residual
+curve to 0 around 750 nm.
+24 However, Rrs~750! may
+not be zero for coastal waters and can vary from place
+Fig. 1. Hydrolight-calculated rrs ~line! versus SA-model-
+determined rrs ~symbols! for three viewing angles.
+20 June 1999 y Vol. 38, No. 18 y APPLIED OPTICS 3833
+
+to place. This variance suggests that the value of
+Rrs~750! for coastal waters may have to be derived.
+It has been found that Trs can be expressed as23–25
+Trs~l! < Rrs~l! 1 F~u!Srs~l! 1 D, (13)
+where F~u! is the surface Fresnel reﬂectance based on
+the viewing geometry and D is a spectrally constant
+offset.
+If we deﬁne a quantity called raw-remote-sensing
+reﬂectance Rrs
+raw as
+Rrs
+raw~l! 5 Trs~l! 2 F~u!Srs~l!, (14)
+approximation ~13! can be rewritten as
+Rrs
+raw~l! < Rrs~l! 1 D. (15)
+In approximation ~15!, Rrs
+raw~l! is a known spec-
+trum derived from above-surface measurements. If
+we replaceR
+rs~l! in approximation~15! by the expres-
+sion of approximation ~2!, remote measurement of
+in-water optical properties is a process of spectrally
+decomposing approximation ~15!. Therefore the
+next important step is how to derive more accurately
+such environmental properties as absorption and bot-
+tom depth from approximation ~15!.
+Each measured R
+rs
+raw~l! spectrum consists of at
+least three unknown spectra @a~l!, bb~l!, and r~l!#
+and two scalar unknowns ~H and D!. This composi-
+tion suggests that, if the sensor hasn channels, there
+are ~3n 1 2! unknowns to be deduced. To solve for
+these many unknowns, additional relationships have
+to be established to reduce the number of unknowns
+~or increase the number of equations!.
+B. Parameterization
+In Eq. ~8! the values of aw~l!, the absorption coefﬁ-
+cients of pure water, were taken from Pope and Fry.26
+The absorption coefﬁcient of phytoplankton pig-
+ments is af~l! which must be derived from remote
+measurements. We used a single-parameter model
+to simulate this spectrum
+27:
+af ~l! 5 @a0~l! 1 a1~l!ln~P!#P, (16)
+where P 5 af~440! is the phytoplankton absorption
+coefﬁcient at 440 nm. The empirical coefﬁcients for
+a
+0~l! and a1~l! are presented in Ref. 13. This ap-
+proach allows the af~l! curvature to change with
+af~440!, consistent with ﬁeld observations, at least to
+ﬁrst order.
+The absorption coefﬁcient of gelbstoff and detritus
+is ag~l!, which can be expressed as20,28,29
+ag~l! 5 G exp@2S~l 2 440!#, (17)
+with G 5 ag~440!. S is the spectral slope, and it has
+been reported in the range of 0.011–0.021 nm21.20,30
+Because G is a sum of gelbstoff and detritus absorp-
+tion spectra, we used an S value of 0.015 nm21 as a
+representative average in our inversion process.
+Equation ~10! is rewritten as
+bb9~l! 5 bbw~l! 1 bbp9~l! (18)
+with values for bbw~l! taken from Morel.31 We ex-
+press bbp9~l! as
+bbp9 5 XS
+400
+l D
+Y
+, (19)
+where X 5 bbp9~400!, which combines the particle-
+backscattering coefﬁcient, viewing-angle informa-
+tion, as well as sea state into one variable. The
+spectral shape parameter Y is estimated by an em-
+pirical relationship
+32:
+Y < 3.44@1 2 3.17 exp~22.01x!#, (20)
+with x5 Rrs
+in~440!yRrs
+in~490!. Rrs
+in~l! is the initial
+estimate of Rrs~l! and is determined as follows:
+Rrs
+in~l! 5 Rrs
+raw~l! 2 Rrs
+raw~750!. (21)
+We keep Y within the 0–2.5 range.
+For r~l! a 550-nm-normalized, sand-albedo shape
+@rsd~l!# was used ~Fig. 2!. Note that only sandy en-
+vironments were examined in the ﬁeld tests. There-
+fore r~l! is expressed as
+r~l! 5 Br
+sd~l!, (22)
+where B is the bottom albedo value at 550 nm.
+With the above considerations there are six vari-
+ables for Eq. ~15!: P, G, X, B, H, and D. These six
+variables uniquely inﬂuence the Rrs
+raw~l! spectra,
+which avoids the possibility of a singularity arising
+from Eq. ~15! unless the data are very noise. To
+overcome random noise and to always provide a mea-
+sured value near the peak of the R
+rs~l! curve, a hy-
+perspectral data set was used. The six unknowns
+can be derived by minimizing the differences between
+R
+rs curves that are modeled @approximation ~2!# and
+measured as expressed by
+Rˆ rs~l! 5 Rrs
+raw~l! 2 D. (23)
+An index for comparing the two Rrs curves was de-
+ﬁned in Ref. 23,
+err 5
+F(
+400
+675
+~Rrs 2 Rˆ rs!2 1 (
+750
+830
+~Rrs 2 Rˆ rs!2
+G
+0.5
+(
+400
+675
+Rˆ rs 1 (
+750
+830
+Rˆ rs
+, (24)
+Fig. 2. A 550-nm normalized bottom-albedo spectrum.
+3834 APPLIED OPTICS y Vol. 38, No. 18 y 20 June 1999
+
+providing a measure of the fractional difference be-
+tween the two curves.
+C. Optimization
+Optimization or minimization is effectively a
+predictor–corrector, model-inversion scheme,
+achieved by adjusting the values of the variables in
+the SA-model in response to the err function. For
+nonlinear optimization, initial values are important
+for the process. We set the values in the following
+manner, which has no relationship to ground truth
+values:
+P
+in 5 0.072@Rrs
+in~440!yRrs
+in~550!#21.62 ~Ref. 33!,
+Gin 5 Pin,
+Xin 5 30aw~640!Rrs
+in~640!,
+Bin 5 0.2 @equivalent to r~550! 5 0.2#,
+Hin 5 10.0,
+Din 5 Rrs
+raw~750!.
+For each set of values for the six unknowns an opti-
+mization program computes the err value of Eq. ~24!
+and repeats the process with different sets of values
+until err reaches a minimum. At that point, values
+for P, G, X, B, and H are then considered to be de-
+rived. In the process, values for P, G, X, B, and H
+are kept positive. Note that no ﬁeld data are re-
+quired except the measured R
+rs
+raw~l! curves.
+The performance of the above model-inversion
+scheme can be tested by using perfect Hydrolight-
+generated data for the ﬁrst test and ﬁeld data for the
+second.
+4. Data
+A. Computer-Simulated Data
+Using a particle phase function typical of coastal wa-
+ters,34 we calculated above-surface upwelling radi-
+ance values observed at 30° to nadir and 90° to the
+solar plane and downwelling irradiance and sky ra-
+diance with Hydrolight 3.0.
+18 Tables 2 and 3 pro-
+vide information regarding the inputs used in the
+computer simulations. Wind speeds of 5 and 10 mys
+were used with the Sun at 10°, 30°, and 60° from
+zenith. The water column was assumed to be homo-
+geneous. The solar input and the bio-optical models
+used in the calculations are discussed in detail in Ref.
+13 ~see Appendix A !. In the simulations the bio-
+optical parameterR for particle scattering at 550 nm
+~see Ref. 13 or Appendix A! was set at 1.0 to indicate
+a possible higher sediment loading in coastal waters.
+A 20% cloud fraction was applied to the calculation.
+As in Ref. 13, a spectrally constant bottom albedo was
+applied for data simulation.
+In total, T
+rs for seven depths, two wind speeds, and
+three sun angles was calculated. It included
+chlorophyll-a concentrations ranging from 0.1 to 2.0
+mgym
+3 and bottom depths ranging from 2.0 to 20.0 m.
+These calculations were intended to test the semiana-
+lytical model and the inversion process for different
+Table 2. Input Values to Hydrolight Calculation Compared with Inversion-Derived Values
+Input Inversion
+@chl-a# af ~440! ag~440! HS Y a f~440! ag~440! HSY w
+2.0 0.094 0.141 2.0 0.014 1.0 0.101 0.129 2.1 0.015 0.5 0.78
+2.0 0.094 0.141 5.0 0.014 1.0 0.109 0.092 4.9 0.015 0.2 0.51
+1.0 0.060 0.090 4.0 0.014 1.0 0.065 0.078 4.2 0.015 0.5 0.72
+1.0 0.060 0.090 8.0 0.014 1.0 0.067 0.063 7.8 0.015 0.4 0.40
+0.4 0.033 0.050 8.0 0.014 1.0 0.035 0.044 8.4 0.015 0.8 0.61
+0.4 0.033 0.050 12.0 0.014 1.0 0.036 0.042 12.4 0.015 0.8 0.38
+0.1 0.013 0.020 15.0 0.014 1.0 0.014 0.021 16.0 0.015 1.7 0.55
+0.1 0.013 0.020 20.0 0.014 1.0 0.014 0.023 22.3 0.015 1.8 0.36
+Note: Sun, 30° from zenith; wind speed, 5 m ys; observation angles ~30°, 90°!.
+Table 3. Input Values to Hydrolight Calculation Compared with Inversion-Derived Values
+Input Inversion
+@chl-a# af ~440! ag~440! HS Y a f~440! ag~440! HS Y w
+2.0 0.094 0.141 2.0 0.014 1.0 0.100 0.131 2.1 0.015 0.5 0.78
+2.0 0.094 0.141 5.0 0.014 1.0 0.107 0.094 4.9 0.015 0.2 0.51
+1.0 0.060 0.090 4.0 0.014 1.0 0.065 0.078 4.2 0.015 0.4 0.73
+1.0 0.060 0.090 8.0 0.014 1.0 0.066 0.065 7.9 0.015 0.4 0.41
+0.4 0.033 0.050 8.0 0.014 1.0 0.035 0.044 8.5 0.015 0.8 0.62
+0.4 0.033 0.050 12.0 0.014 1.0 0.035 0.042 12.3 0.015 0.8 0.40
+0.1 0.013 0.020 15.0 0.014 1.0 0.014 0.021 16.0 0.015 1.7 0.56
+0.1 0.013 0.020 20.0 0.014 1.0 0.013 0.023 22.0 0.015 1.8 0.38
+Note: Sun, 30° from zenith; wind speed, 10 m ys; observation angles ~30°, 90°!.
+20 June 1999 y Vol. 38, No. 18 y APPLIED OPTICS 3835
+
+situations, in which all derived values could be com-
+pared with exact input values for Hydrolight. Field
+comparisons are used as a more realistic evaluation
+of the method, at least for environments similar to
+Florida shelf waters.
+B. Field Data
+From 1990 to 1998 a series of ﬁeld measurements
+were taken over shallow waters along the west Flor-
+ida shelf, Key West, Fla., and the Bahamas. The
+water depths ranged from 0.8 to 25.0 m; @chl-a#
+ranged from 0.3 to 2.3 mg ym
+3. In the left panel of
+Table 4 water-property information is summarized,
+whereas Fig. 3 presents most of the sites on a regional
+map. For each station, hyperspectral T
+rs, Srs, par-
+ticle and pigment absorption coefﬁcients ~ap and af!
+and gelbstoff absorption for some of the surface-water
+samples were measured. Depth was determined
+acoustically ~60.3 m! for the deeper waters and with
+a lead-weighted line ~60.1 m! for Florida Bay sta-
+tions. Only the T
+rs and Srs data were used as inputs
+to the inversion process. The other measurements
+were reserved to validate the method.
+1. Total-Remote-Sensing Reﬂectance T
+rs and Sky
+Input Srs
+Hyperspectral Trs and Srs were calculated by the
+method of Lee et al.23 Brieﬂy, using a Spectron En-
+gineering spectroradiometer ~Spectron Model SE-
+590, Spectrix for 1997 and later !, a series ~;3t o5
+scans! of upwelling radiance above the surface
+@Lu~01, ua, w!# and downwelling sky radiance@Lsky~u9,
+w!# was directly measured with ua ~viewing angle in
+the air!' 30° from nadir and w approximately 90°
+from the solar plane. Sky radiance was measured in
+the same plane asL
+u~01! but from a direction ofu9 '
+30° from zenith. Downwelling irradiance was de-
+rived by measuring the radiance L
+G reﬂected from a
+standard diffuse reﬂector ~Spectralon!. For each of
+Table 4. Field Data
+Location In Situ Inversion
+Latitude
+~North!
+Longitude
+~West!@ chl-a# af ~440! ag~440! Ha f ~440! ag~440! HYw Err
+25.127 80.809 2.32 0.070 0.8 0.068 0.530 1.3 0 0.49 0.01
+25.08 80.757 0.98 0.051 1.6 0.037 0.333 2.0 0 0.53 0.01
+25.065 80.67 1.43 0.055 1.8 0.021 0.181 2.6 0 0.32 0.01
+25.034 80.589 0.58 0.028 1.7 0.005 0.158 2.1 1 0.23 0.02
+24.985 80.434 0.021 8.0 0.012 0.032 7.9 0.9 0.75 0.02
+24.975 80.494 0.016 5.5 0.005 0.124 5.1 0 0.70 0.03
+24.955 80.477 0.014 5.5 0.014 0.029 5.3 1.2 0.70 0.02
+24.534 81.465 0.038 6.5 0.027 0.108 5.5 0.3 0.36 0.02
+24.55 81.414 0.020 8.0 0.017 0.050 8.2 0.9 0.42 0.02
+24.714 81.169 0.31 0.022 0.240 3.5 0.033 0.209 3.7 0 0.46 0.02
+24.624 81.119 0.42 0.025 0.031 7.6 0.015 0.026 8.4 1.1 0.73 0.02
+24.624 81.12 0.36 0.025 0.025 8.2 0.016 0.030 8.0 0.8 0.79 0.03
+24.625 81.105 0.32 0.025 0.023 10.9 0.015 0.030 9.3 1.5 0.51 0.02
+24.69 81.12 0.51 0.036 0.210 3.5 0.028 0.160 3.4 0.1 0.33 0.02
+27.342 83.054 0.43 0.043 16.0 0.027 0.078 13.4 0.5 0.42 0.02
+27.592 83.039 0.61 0.031 25.0 0.026 0.032 23.9 1.5 0.16 0.02
+27.602 82.995 0.66 0.043 0.059 17.5 0.013 0.046 18.3 0.7 0.32 0.03
+27.594 82.925 0.42 0.025 0.063 14.5 0.013 0.061 15.3 0.4 0.30 0.02
+27.605 82.812 0.8 0.040 0.100 8.4 0.034 0.098 8.3 0.3 0.24 0.01
+27.564 82.762 1.40 0.077 0.203 8.5 0.005 0.260 7.1 0 0.53 0.03
+27.374 82.746 0.21 0.046 0.132 11.9 0.032 0.094 10.6 0 0.63 0.02
+24.678 81.908 0.46 0.021 0.056 10.7 0.011 0.053 11.3 0.5 0.41 0.02
+23.78 76.10 0.12 0.011 0.034 16.8 0.006 0.028 16.0 0.7 0.78 0.01
+23.785 76.101 0.12 0.010 0.033 18.0 0.007 0.022 17.3 1 0.76 0.02
+23.778 76.09 0.16 0.014 0.027 15.9 0.012 0.031 16.1 0.7 0.64 0.02
+23.77 76.08 0.15 0.012 0.033 16.8 0.009 0.024 17.0 0.9 0.72 0.02
+23.78 76.11 0.13 0.012 0.038 22.0 0.012 0.030 17.6 0.7 0.56 0.02
+23.779 76.119 0.20 0.016 0.055 7.6 0.013 0.054 7.2 0.2 0.85 0.02
+23.78 76.119 0.13 0.015 0.049 8.0 0.006 0.053 7.8 0.1 0.87 0.01
+23.79 76.107 0.10 0.012 0.025 13 0.007 0.037 15.9 0.4 0.65 0.02
+25.2 82.06 20.7 0.018 0.061 18.2 0.8 0.32 0.02
+25.207 82.069 0.24 0.024 0.106 22.0 0.018 0.079 20.9 0.8 0.23 0.02
+25.712 82.224 0.31 0.038 0.187 20.4 0.029 0.133 18.5 0.3 0.23 0.03
+26.428 82.448 19.2 0.021 0.054 22.3 0.6 0.32 0.02
+23.786 76.101 0.13 0.011 0.030 16.2 0.005 0.032 15.5 0.3 0.91 0.03
+23.78 76.09 0.07 0.012 0.035 16.5 0.008 0.026 16.2 0.9 0.73 0.02
+23.77 76.1 0.16 0.013 0.033 15.9 0.012 0.031 17.1 0.7 0.58 0.02
+3836 APPLIED OPTICS y Vol. 38, No. 18 y 20 June 1999
+
+the measured scans,Trs and Srs were derived through
+Trs 5 Lu
+LG
+RG
+p , Srs 5 Lsky
+LG
+RG
+p , (25)
+where RG is the reﬂectance of the diffuse reﬂector
+~;10%!.
+Based on these measured Trs and Srs curves, aver-
+ages of Trs and Srs were obtained, respectively, to
+reduce the random variations associated with mea-
+surements owing to reﬂection from different wave
+facets etc. These averaged curves are used in the
+inversion process with an F~30! value of 0.022 for
+deriving R
+rs
+raw.
+2. Absorption Coefﬁcient of Particles and
+Pigments, ap and af
+The af~l! was measured following the SeaWiFS pro-
+tocols.35 Basically the method described in Ref. 36
+was used to measure the particle absorption coefﬁ-
+cient on the GFyF ﬁlter pad a
+p, and the method de-
+veloped by Kishinoet al.37 and modiﬁed by Roesleret
+al.38 was used to measure the detritus absorption on
+the pad ad to calculate the phytoplankton absorption
+coefﬁcientaf. The b factor from Bricaud and Stram-
+ski39 @their Eq. ~2!# for the correction of the optical-
+path elongation due to ﬁlter-pad multiple scattering
+was used for the calculations of a
+p and ad. Large-
+particle scattering was removed when ap~780!5 0
+was assumed. The difference between the particle
+and the detrital absorption coefﬁcients provided the
+absorption coefﬁcient of phytoplankton pigmentsa
+f:
+af 5 ap 2 ad. (26)
+3. Absorption Coefﬁcient of Gelbstoff a g
+Samples for ag were obtained by ﬁltering seawater
+samples ﬁrst through preﬂushed 47-mm GFyF ﬁlters
+and then through 47-mm, 0.2- mm polycarbonate ﬁl-
+ters. Absorption spectra were measured in 10-cm
+quartz cuvettes by use of a Perkin-Elmer Lambda 18
+dual-beam spectrophotometer.
+5. Results and Discussion
+A. Computer-Simulated Data
+For the computer-generated data a spectrally con-
+stant bottom-albedo shape was used in the inversion
+process. For the three sun angles the mean differ-
+ence for depths was 5.3% between the SA-model in-
+versions and Hydrolight data for 5-m ys wind speed
+and 5.1% for 10-mys wind speed ~see Fig. 4 and Ta-
+bles 2 and 3 !. For comparison of two data sets the
+difference d was calculated as in Ref. 23 to provide
+equal weighting to underestimation as well as over-
+estimation:
+d 5 exp
+FmeanUlnS
+Qi
+der
+Qi
+meaDUG2 1, (27)
+where Qi represents the individual quantity such as
+the depth or the absorption coefﬁcient. Qi
+der repre-
+sents the derived value, whereas Qi
+mea represents
+either the Hydrolight input or the ﬁeld-measured
+value.
+As an example, for the Sun at a 30° zenith angle
+and wind speeds of 5 and 10 mys, the derived bottom
+depths along with in-water optical properties are
+listed in the right panel of Tables 2 and 3, respec-
+tively, with input values to Hydrolight listed at the
+left side for comparison. For other sun angles, re-
+sults are indicated in Figs. 5–15. In Tables 2–4 w is
+deﬁned as
+w 5 max
+F
+rrs
+B~l!
+rrs~l! G, (28)
+Fig. 3. Locations of ﬁeld data.
+Fig. 4. ~a! Inversion-derived depths compared with input values
+for simulated data with 5 mys of wind. ~b! As in ~a! with 10 mys
+of wind.
+20 June 1999 y Vol. 38, No. 18 y APPLIED OPTICS 3837
+
+or the maximum ratio of bottom contribution to the
+total for each case, calculated with inversion-derived
+data. In this study stations with w values of less
+than 0.15 were not included. R
+rs at those stations
+was less sensitive to the depth, and reliable depth
+values were not expected. This criterion provides a
+useful operational constraint.
+Generally the retrieved depths agreed with the Hy-
+drolight input depths very closely ~;5% difference!
+with slight overestimations for deeper depths ~see
+Fig. 4!, where theY values used in the inversion were
+much larger than the Y values in computer simula-
+tions ~see Tables 2 and 3!.
+In Fig. 5 we compare the derived a~440! with the
+Fig. 5. ~a! Inversion-derived total absorption at 440 nm compared
+with input values for simulated data with 5 mys of wind. ~b! As
+in ~a! with 10 mys of wind.
+Fig. 6. ~a! Inversion-derived pigment absorption at 440 nm com-
+pared with input values for simulated data with 5 m ys of wind.
+~b! As in ~a! with 10 mys of wind.
+Fig. 7. ~a! Inversion-derived gelbstoff absorption at 440 nm com-
+pared with input values for simulated data with 5 m ys of wind.
+~b! As in ~a! with 10 mys of wind.
+Fig. 8. ~a! Inversion-derived depths compared with input values
+for simulated data with 5 m ys of wind. The Y value used in
+inversion was random~see text!. ~b! As in~a! with 10 mys of wind.
+3838 APPLIED OPTICS y Vol. 38, No. 18 y 20 June 1999
+
+known input values. For the three sun angles the
+average d value was 7.0% for 5-mys wind speed and
+6.3% for 10-mys wind speed fora~440! values ranging
+from 0.04 to 0.24 m 21. In Fig. 6 we compare the
+derived af~440! with the known input values, with d
+values of 7.1% and 6.0% for 5- and 10-mys wind speeds,
+respectively. In Fig. 7 we compare the derived
+a
+g~440! with the known input values, withd values of
+18.6% and 16.2% for the two wind speeds.
+From what we observe here the maximum differ-
+ence occurred for the inversion of ag, which then
+causes differences for other properties of interest.
+Reasons for this larger difference are the following:
+First, the spectral curvatures between b
+bp~l! and
+ag~l! are somewhat similar, which causes compen-
+sation between the values of G and X. Generally,
+smaller Y values will result in smaller ag~440! and
+larger Y values will result in larger ag~440! in the
+inversion. Second, the values of Y used in the in-
+version were based on an estimation from using Eq.
+Fig. 9. ~a! Inversion-derived total absorption at 440 nm compared
+with input values for simulated data with 5 mys of wind. The Y
+value used in inversion was random ~see text!. ~b! As in ~a! with
+10 mys of wind.
+Fig. 10. ~a! Inversion-derived pigment absorption at 440 nm com-
+pared with input values for simulated data with 5 m ys of wind.
+The Y value used in inversion was random~see text!. ~b! As in ~a!
+with 10 mys of wind.
+Fig. 11. ~a! Inversion-derived gelbstoff absorption at 440 nm com-
+pared with input values for simulated data with 5 m ys of wind.
+The Y value used in inversion was random~see text!. ~b! As in ~a!
+with 10 mys of wind.
+Fig. 12. Inversion-derived depths compared with ﬁeld data.
+20 June 1999 y Vol. 38, No. 18 y APPLIED OPTICS 3839
+
+~20! instead of the known input values ~see Tables 2
+and 3!, since theoretically a remote sensor does not
+know the actual Y value of the water. In the nat-
+ural ﬁeld Y values are generally lower for high con-
+centrations of chlorophyll and higher for the open
+ocean with low chlorophyll.
+40 For the inversion
+process estimations of Y were empirically based on
+the variation of the natural ﬁeld,14 but Hydrolight Y
+values were kept constant in the computer simula-
+tion no matter what the chlorophyll concentration
+was. The estimated Y then will not match the in-
+put Y value for each case ~we see a factor of 5–10
+difference for some cases !, and we see a larger dif-
+ference in the a
+g~440! estimation as a result.
+To see the inversion improvement if better esti-
+matedY values were found, another round of inversion
+calculations was made by letting the Y value in the
+inversion be randomly determined between 0.6 and 1.4
+for each case. In Fig. 8 we compare the H values for
+the three sun angles, in Fig. 9 thea~440! values, in Fig.
+10 the a
+f~440! values, and in Fig. 11 the ag~440! val-
+ues. This time, for a 5-m ys wind speed the difference
+was 4.7% forH, 2.9% fora~440!, 5.6% foraf~440!, and
+just 7.4% for ag~440!; for a 10-m ys wind speed, the
+difference is 4.8% for H, 2.4% for a~440!, 4.6% for
+af~440!, and just 7.0% for ag~440!. We see that the
+differences were greatly reduced especially forag~440!,
+and the accuracy for all properties of interest was im-
+proved. These results suggest the importance of good
+estimations of the Y value in the remote-sensing in-
+version.
+The S values used in the inversion were not far
+from the input values. In a manner similar to the
+above discussion we can expect an inﬂuence of differ-
+ent S values on the inversion results. Contrary to
+the inﬂuence of Y values on the inversion, however,
+the value ofS has a smaller inﬂuence onH, but more
+inﬂuence on P and G values, because the effect of
+a
+g~l! is more important at the shorter wavelengths
+and the effect on H depends on the total absorption
+coefﬁcient, not just on ag~l!.
+B. Field Data
+For the ﬁeld data the mean difference for depth was
+10.9% or 1.4 m of the rms error for a range of 0.8–25 m
+~R
+2 5 0.96, N 5 37, see Fig. 12!. If we ignore the four
+stations~* in Fig. 3! in Florida Bay, the difference was
+just 8.1%. This kind of result suggests that the model
+and the optimization method work very well in retriev-
+ing the bottom depths. Larger depth differences were
+found for the Florida Bay stations, where water was
+very turbid ~with b
+bya as high as 1.6! and the bottom
+structure was more complicated. Further studies are
+needed to diagnosis the discrepancies, but turbidity is
+probably the most important factor.
+Of the ﬁeld data, a
+f~440! had a range of 0.010–
+0.070 m21 and ag~440! had a range of 0.023–0.24 m21
+Fig. 13. Inversion-derived pigment absorption coefﬁcient at 440
+nm compared with pad-measured values for ﬁeld data. ~The open
+circle one was not used in error calculation.!
+Fig. 14. Examples of inversion-derived versus pad-measured pig-
+ment absorption spectra.
+Fig. 15. Inversion-derived gelbstoff absorption coefﬁcient at 440
+nm compared with measured values for ﬁeld data.
+3840 APPLIED OPTICS y Vol. 38, No. 18 y 20 June 1999
+
+from water-sample measurements. These data indi-
+cate that the study sites contain a wide variation of
+optical properties of the water column and are cer-
+tainly not case 1 waters.
+21 For af~440! where re-
+trieved ratios ofaf~440!yag~440!. 1y8, the difference
+is 42.7% ~N 5 28!~ see Fig. 13 !. When af~440!y
+ag~440!, 1y8, remote-sensing reﬂectance in the blue-
+green region is less sensitive to the value of af~440!
+and is dominated by the inﬂuence ofag values.
+Figure 14 shows examples of retrieved-versus-
+measured af~l! spectra for low and high chlorophyll
+concentrations, and we see a good match in the shapes.
+This match is important for calculating photons ab-
+sorbed by phytoplankton pigments for photosynthesis.
+The difference between inverted and pad-
+measured a
+f~440! values were large compared with
+the differences for depth andag~440!, owing in part to
+the quite small af~440!yag~440! ratio ~ranging from
+0.13 to 0.8 with an average of 0.27! for these coastal
+waters, compared with normally approximately 1.3–
+2.5 for open ocean waters.
+41 Some of the difference
+resulted from errors in the SA-model and the shape
+parameters ~S and Y values, for example! used in the
+retrieval. Some of the differences, however, may
+come from the a
+f measurement itself. This is in-
+ferred since the derived H values are very compara-
+ble with the in situ values, and there is not much
+difference regarding af~440! in the computer-
+simulated data sets where no measurement error is
+involved. Other possible causes may include the
+lack of any consideration of gelbstoff ﬂuorescence in
+the model, which may be rather signiﬁcant for such a
+gelbstoff-dominated environment.
+The difference was 22.5%~N 5 24! for a
+g~440!~ see
+Fig. 15!. As derived ag~440! is a combination of gelb-
+stoff plus detritus; we would expect an overestima-
+tion in a
+g~440! values. However, we see that both
+af~440! and ag~440! values were generally underes-
+timated. To identify the error sources precisely re-
+garding the difference ina
+f~440! and ag~440! values,
+we need a total absorption coefﬁcient valued for the
+water column. Unfortunately we lack this measure-
+ment for the data sets evaluated.
+The differences between retrieved and true values
+can come from many places. First, the SA-model
+was developed for normal coastal waters with an av-
+erage particle phase function.
+18 This SA-model may
+be inappropriate for extreme cases such as the Flor-
+ida Bay waters. Second, there are errors in the SA-
+model, especially for viewing angles other than nadir.
+When we use the model to perform predictor–
+corrector inversions, those model errors will be trans-
+ferred to the variables of the derivation. Third,
+because the spectral shape parameters such asS and
+Y cannot be accurately estimated from remote-
+sensing data, the errors associated with those param-
+eters will be transferred to the properties of interest.
+Finally, ﬁeld data contain measurement errors, and
+it is hard to ascertain knowledge of the homogeneity
+of water and bottom structures. Considering all
+these difﬁculties and uncertainties, a difference of
+8–11% for depths suggests that the model and ap-
+proach developed here work very well in retrieving
+shallow-water depth from remote sensing in these
+quite complicated coastal waters. More study is nec-
+essary to be able to say the same for the retrieval of
+water-column properties, however.
+6. Summary
+A model and an inversion method have been developed
+for the retrieval of bottom depth and in-water optical
+properties for a broad range of water types. The
+model and approach were applied to computer-
+simulated and ﬁeld-measured data for shallow waters
+with a uniform, sand-type bottom. For computer-
+simulated data the retrieved depth was in general ac-
+curate to within 5% for a range of 2.0–20.0 m, and for
+ﬁeld data it was accurate to within 11%~N 5 37! for a
+range of 0.8–25 m. For data outside Florida Bay,
+however, it was within 8%~N 5 33! for depth. Larger
+differences occurred in the retrieval of pigment absorp-
+tion coefﬁcients for the ﬁeld data, but not for the
+computer-simulated data, which suggests that some of
+the measured pigment absorption values or their
+model simulations need further analysis. These re-
+sults suggest that the model and approach developed
+here can be used for many coastal remote-sensing ap-
+plications, but knowledge of the spectral shapes of phy-
+toplankton and gelbstoff absorption and spectral shape
+of particle scattering would be helpful for better results
+in any given region.
+As a result of these analyses, phase functions more
+consistent with the turbid waters of Florida Bay will
+be considered for new parameterization of the SA
+model. Clearly, higher backscattering efﬁciency is
+required for suspended mineral sediments than for
+the biogenous particles dominating the average par-
+ticle phase function of Mobley.
+34 The addition of
+gelbstoff ﬂuorescence will also be considered in future
+retrievals in gelbstoff-rich waters.
+Appendix A: Semianalytical Model for Remote-Sensing
+Reﬂectance of Shallow Waters
+Based on quasi-single-scattering theory, 42 subsur-
+face, nadir-viewing, remote-sensing reﬂectance is de-
+scribed as
+r
+rs 5 rrs
+dp
+(1 2 a0 expH2F
+1
+cos~uw! 1 D0~1 1 D1 u!0.5
+GkHJ)
+1 a1r expH2F
+1
+cos~uw! 1 D09~1 1 D19u!0.5
+GkHJ,
+(A1)
+with
+rrs
+dp 5 ~g0 1 g1 ug2!u (A2)
+for optically deep waters whereu [ bby~a 1 bb!, k[
+a 1 bb. The terms g0, g1, g2, a0, a1, D0, D1, D09, and
+D19 are model parameters and are spectrally con-
+stant. To use Eqs. ~A1! and ~A2! to modelrrs when a,
+bb, r, and H are known, values of the model param-
+eters need to be determined. Lee et al .13 derived
+those values by ﬁtting Eqs. ~A1! and ~A2! to a large
+20 June 1999 y Vol. 38, No. 18 y APPLIED OPTICS 3841
+
+set of rrs values that were created by using a precise
+numerical model, Hydrolight.18
+In the numerical simulation, wind speed was set at
+5m ys, the water body was assumed homogeneous,
+and solar zenith angles were set at 0°, 30°, and 60°.
+An average particle phase function described in Mo-
+bley et al.
+34 was used. The scattering of pure sea-
+water was treated as a separate component with a
+Rayleigh-like phase function.
+34 Chlorophyll concen-
+tration was used as a surrogate to determine the
+coefﬁcients of particle absorption and scattering, by
+use of simple bio-optical models.
+The total absorption coefﬁcient is expressed as a
+sum of the absorption coefﬁcients for pure water, phy-
+toplankton pigments, and gelbstoff. Absorption val-
+ues for pure water were taken from Ref. 26, whereas
+absorption for phytoplankton pigments and gelbstoff
+were modeled as follows:
+a
+f ~440! 5 0.06 @chl-a#0.65,43 (A3)
+ag~l! 5 ag~440!exp@20.014~l 2 440!#,28 (A4)
+and af~l! was simulated with the model of Leeet al.13
+The total scattering coefﬁcient is expressed as a
+sum of the scattering coefﬁcients for pure seawater
+and particles. Scattering coefﬁcients for pure sea-
+water come from Morel,
+31 whereas scattering coefﬁ-
+cients for particles come from the model of Gordon
+and Morel,
+43
+bp~l! 5 ~550yl!R@chl-a#0.62. (A5)
+Here R is a bio-optical parameter, which was 0.3 in
+Gordon and Morel. 43 R values of 0.3, 1.0, and 5.0
+were used to simulate a range from normal to highly
+turbid coastal waters.
+A spectrally constant bottom albedo r was used
+with values of 0, 0.1, 0.3, and 1.0. Although the
+bottom reﬂectance was taken to be independent of
+wavelength, the inherent optical properties of the
+water column were wavelength dependent. This de-
+pendence allowed the fractional contribution of
+bottom-to-total radiance to be wavelength dependent.
+By ﬁtting Hydrolight-simulated r
+rs for both deep
+and shallow situations, Leeet al.13 derived the model-
+parameter values that follow:
+g0 < 0.07, g1 < 0.155, g2 < 0.752;
+a0 < 1.03, a1 < 0.31;
+D0 < 1.2, D1 < 2.0;
+D09 < 1.1, D19 < 4.9.
+Recently, with more Hydrolight-simulated data,
+and correcting a calculation error in the earlier study,
+the above values were updated as
+g
+0 < 0.084, g1 < 0.170, g2 5 1;
+a0 5 1, a1 5 1yp;
+D0 < 1.03, D1 < 2.4;
+D09 < 1.04, D19 < 5.4.
+Therefore the SA model for subsurface remote-
+sensing reﬂectance is
+rrs < rrs
+dp
+(1 2 expH2F
+1
+cos~uw! 1 1.03~1 1 2.4u!0.5
+GkHJ)
+1 1
+p r expH2F
+1
+cos~uw! 1 1.04~1 1 5.4u!0.5
+GkHJ,
+(A6)
+with
+rrs
+dp < ~0.084 1 0.17u!u. (A7)
+Since satellite sensors measure radiance above the
+surface, the relationship betweenRrs and rrs must be
+known. There is 13,43,44
+Rrs 5 zrrs
+1 2 Grrs
+, (A8)
+Eq. ~A8! is exact, where z and G are model parame-
+ters, and their values depend on viewing angle and
+water properties. The denominator ~1 2G r
+rs! ac-
+counts for the effects of internal reﬂection from water
+to air. Although this internal-reﬂection term is of-
+ten ignored, especially for open-ocean waters, we re-
+tain it here becauser
+rs can be quite large for turbid or
+shallow waters. For remote-sensing applications
+the values of z and G in Eq. ~A8! need to be deter-
+mined. By comparison of the Hydrolight-generated
+R
+rs and rrs values, it was found that z' 0.5 and G'
+1.5 for remote-sensing observation angles. 17 Thus
+Eq. ~A8! takes the speciﬁc form as used in this paper:
+Rrs < 0.5rrs
+1–1.5rrs
+. (A9)
+Financial support was provided by NASA through
+grants NAG5-3446, NAS5-97137, NAS5-31716, the
+Ofﬁce of Naval Research ~ONR! through grant
+N00014-96-I-5013, and the National Oceanic and At-
+mospheric Administration ~NOAA! Coastal Ocean
+Program RyNCOP-5. The development of Hydroli-
+ght was supported in part by the ONR Environmen-
+tal Optics Program under various contracts to C. D.
+Mobley, who was supported for this study through
+contract N00014-97-C-0024. We are also grateful
+for helpful comments and suggestions by two anony-
+mous reviewers.
+References
+1. F. C. Polcyn, W. L. Brown, and I. J. Sattinger, “The measure-
+ment of water depth by remote-sensing techniques,” Rep. 8973-
+26-F ~Willow Run Laboratories, University of Michigan, Ann
+Arbor, Mich., 1970!.
+2. D. R. Lyzenga, “Passive remote-sensing techniques for map-
+ping water depth and bottom features,” Appl. Opt.17, 379–383
+~1978!.
+3. D. R. Lyzenga, “Remote sensing of bottom reﬂectance and
+water attenuation parameters in shallow water using aircraft
+and Landsat data,” Int. J. Remote Sensing 2, 71–82 ~1981!.
+4. J. M. Paredes and R. E. Spero, “Water depth mapping from
+3842 APPLIED OPTICS y Vol. 38, No. 18 y 20 June 1999
+
+passive remote-sensing data under a generalized ratio as-
+sumption,” Appl. Opt. 22, 1134–1135 ~1983!.
+5. R. K. Clark, T. H. Fay, and C. L. Walker, “Bathymetry calcu-
+lations with Landsat 4 TM imagery under a generalized ratio
+assumption,” Appl. Opt. 26, 4036–4038 ~1987!.
+6. D. Spitzer and R. W. J. Dirks, “Bottom inﬂuence on the reﬂec-
+tance of the sea,” Int. J. Remote Sensing 8, 279–290 ~1987!.
+7. N. T. O’Neill and J. R. Miller, “On calibration of passive optical
+bathymetry through depth soundings analysis and treatment
+of errors resulting from the spatial variation of environmental
+parameters,” Int. J. Remote Sensing 10, 1481–1501 ~1989!.
+8. W. D. Philpot, “Bathymetric mapping with passive multispec-
+tral imagery,” Appl. Opt. 28, 1569–1578 ~1989!.
+9. D. R. Lyzenga, “Shallow-water bathymetry using combined
+lidar and passive multispectral scanner data,” Int. J. Remote
+Sensing 6, 115–125 ~1985!.
+10. W. D. Philpot, “Radiative transfer in stratiﬁed waters: a
+single-scattering approximation for irradiance,” Appl. Opt.26,
+4123–4132 ~1987!.
+11. Z. P. Lee, K. L. Carder, S. K. Hawes, R. G. Steward, T. G.
+Peacock, and C. O. Davis, “A model for interpretation of hy-
+perspectral remote-sensing reﬂectance,” Appl. Opt. 33, 5721–
+5732 ~1994!.
+12. S. Maritorena, A. Morel, and B. Gentili, “Diffuse reﬂectance of
+oceanic shallow waters: inﬂuence of water depth and bottom
+albedo,” Limnol. Oceanogr. 39, 1689–1703 ~1994!.
+13. Z. P. Lee, K. L. Carder, C. D. Mobley, R. G. Steward, and J. S.
+Patch, “Hyperspectral remote sensing for shallow waters: 1.
+A semianalytical model,” Appl. Opt. 37, 6329–6338 ~1998!.
+14. K. L. Carder, F. R. Chen, Z. P. Lee, and S. Hawes, “Semiana-
+lytic
+MODIS algorithms for chlorophyll-a and absorption with
+bio-optical domains based on nitrate-depletion temperatures,”
+J. Geophys. Res. 104, 5403–5421 ~1999!.
+15. R. W. Preisendorfer, Hydrologic Optics Vol. 1: Introduction ,
+NTIS PB-259 793y8ST ~National Technical Information Ser-
+vice, Springﬁeld, Va., 1976!.
+16. B. R. Marshall and R. C. Smith, “Raman scattering and in-
+water ocean properties,” Appl. Opt. 29, 71–84 ~1990!.
+17. A. Morel and B. Gentili, “Diffuse reﬂectance of oceanic waters
+~Part 2 !: Bidirectional aspects,” Appl. Opt. 32, 6864–6879
+~1993!.
+18. C. D. Mobley, Hydrolight 3.0 Users’ Guide, Final Report, SRI
+~SRI International, Menlo Park, Calif. 94025, 1995 !, Project
+5632.
+19. H. R. Gordon, R. C. Smith, and J. R. V. Zaneveld, “Introduction
+to ocean optics,” in Ocean Optics VI, S. Q. Duntley, ed., Proc.
+SPIE 208, 1–43 ~1979!.
+20. K. L. Carder, S. K. Hawes, K. A. Baker, R. C. Smith, R. G.
+Steward, and B. G. Mitchell, “Reﬂectance model for quantify-
+ing chlorophyll-a in the presence of productivity degradation
+products,” J. Geophys. Res. 96, 20,599–20,611 ~1991!.
+21. A. Morel and L. Prieur, “Analysis of variations in ocean color,”
+Limnol. Oceanogr. 22, 709–722 ~1977!.
+22. W. W. Gregg and K. L. Carder, “A simple spectral solar irra-
+diance model for cloudless maritime atmospheres,” Limnol.
+Oceanogr. 35, 1657–1675 ~1990!.
+23. Z. P. Lee, K. L. Carder, T. G. Peacock, C. O. Davis, and J. L.
+Mueller, “Method to derive ocean absorption coefﬁcients from
+remote-sensing reﬂectance,” Appl. Opt. 35, 453–462 ~1996!.
+24. K. L. Carder and R. G. Steward, “A remote-sensing reﬂectance
+model of a red tide dinoﬂagellate off West Florida,” Limnol.
+Oceanogr. 30, 286–298 ~1985!.
+25. R. W. Austin, “Inherent spectral radiance signatures of the
+ocean surface,” in Ocean Color Analysis ~Final Technical Re-
+port!, S. Q. Duntley, ed., SIO Ref. 74-10~Scripps Institution of
+Oceanography, La Jolla, Calif., 1974!, pp. 2.1–2.20.
+26. R. Pope and E. Fry, “Absorption spectrum ~380–700 nm ! of
+pure waters: II. Integrating cavity measurements,” Appl.
+Opt. 36, 8710–8723 ~1997!.
+27. Z. P. Lee, “Visible-infrared remote-sensing model and applica-
+tions for ocean waters,” Ph.D. dissertation~University of South
+Florida, Department of Marine Science, St. Petersburg, Fla.,
+1994!.
+28. A. Bricaud, A. Morel, and L. Prieur, “Absorption by dissolved
+organic matter of the sea ~yellow substance! in the UV and
+visible domains,” Limnol. Oceanogr. 26, 43–53 ~1981!.
+29. C. S. Roesler and M. J. Perry, “ In situ phytoplankton absorp-
+tion, ﬂuorescence emission, and particulate backscattering
+spectra determined from reﬂectance,” J. Geophys. Res. 100,
+13,279–13,294 ~1995!.
+30. K. L. Carder, R. F. Steward, R. R. Harey, and P. B. Ortner,
+“Marine humic and fulvic acids: their effects on remote sens-
+ing of ocean chlorophyll,” Limnol. Oceanogr.34, 68–81 ~1989!.
+31. A. Morel, “Optical properties of pure water and pure sea wa-
+ter,” inOptical Aspects of Oceanography, N. G. Jerlov and E. S.
+Nielsen, eds. ~Academic, New York, 1974!, pp. 1–24.
+32. Z. P. Lee, K. L. Carder, J. Marra, R. G. Steward, and M. J.
+Perry, “Estimating primary production at depth from remote
+sensing,” Appl. Opt. 35, 463–474 ~1996!.
+33. Z. P. Lee, K. L. Carder, R. G. Steward, T. G. Peacock, C. O.
+Davis, and J. L. Mueller, “Remote-sensing reﬂectance and in-
+herent optical properties of oceanic waters derived from above-
+water measurements,” in Ocean Optics XIII , S. J. Ackleson,
+ed., Proc. SPIE 2963, 160–166 ~1996!.
+34. C. D. Mobley, Light and Water: Radiative Transfer in Natu-
+ral Waters ~Academic, New York, 1994!.
+35. J. L. Mueller and R. W. Austin, “Ocean optics protocols for
+SeaWiFS validation,” NASA Tech. Memo. 104566, Vol. 5, S. B.
+Hooker and E. R. Firestone, eds.~NASA Goddard Space Flight
+Center, Greenbelt, Md., 1992!.
+36. B. G. Mitchell and D. A. Kiefer, “Chl-a speciﬁc absorption and
+ﬂuorescence excitation spectra for light limited phytoplank-
+ton,” Deep-Sea Res. 35, 635–663 ~1988!.
+37. M. Kishino, M. Takahashi, N. Okami, and S. Ichimura, “Esti-
+mation of the spectral absorption coefﬁcients of phytoplankton
+in a thermally stratiﬁed sea,” Bull. Mar. Sci.37,634–642 ~1985!.
+38. C. S. Roesler, M. J. Perry, and K. L. Carder, “Modelingin situ
+phytoplankton absorption from total absorption spectra in pro-
+ductive inland marine waters,” Limnol. Oceanogr. 34, 1510–
+1523 ~1989!.
+39. A. Bricaud and D. Stramski, “Spectral absorption coefﬁcients
+of living phytoplankton and nonalgal biogenous matter: a
+comparison between the Peru upwelling area and the Sargasso
+Sea,” Limnol. Oceanogr. 35, 562–582 ~1990!.
+40. S. Sathyendranath, L. Prieur, and A. Morel, “A three-
+component model of ocean color and its application to remote
+sensing of phytoplankton pigments in coastal waters,” Int. J.
+Remote Sensing 10, 1373–1394 ~1989!.
+41. J. J. Walsh, K. L. Carder, and F. E. Mueller-Karger, “Meridi-
+onal ﬂuxes of dissolved organic matter in the North Atlantic
+Ocean,” J. Geophys. Res. 97, 15,625–15,637 ~1992!.
+42. H. R. Gordon, O. B. Brown, and M. M. Jacobs, “Computed rela-
+tionship between the inherent and apparent optical properties of
+a ﬂat homogeneous ocean,” Appl. Opt.14, 417–427 ~1975!.
+43. H. R. Gordon and A. Morel, Remote Assessment of Ocean Color
+for Interpretation of Satellite Visible Imagery: A Review
+~Springer-Verlag, New York, 1983!,p .4 4 .
+44. H. R. Gordon, O. B. Brown, R. H. Evans, J. W. Brown, R. C.
+Smith, K. S. Baker, and D. K. Clark, “A semianalytic radiance
+model of ocean color,” J. Geophys. Res.93,10,909–10,924~1988!.
+20 June 1999 y Vol. 38, No. 18 y APPLIED OPTICS 3843

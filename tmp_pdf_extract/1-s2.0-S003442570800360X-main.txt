@@ -1,0 +1,1209 @@
+A physics based retrieval and quality assessment of bathymetry from suboptimal
+hyperspectral data
+Vittorio E. Brando a,⁎, Janet M. Anstee a, Magnus Wettle a, Arnold G. Dekker a,
+Stuart R. Phinn b, Chris Roelfsema b
+a Environmental Remote Sensing Group, CSIRO Land and Water, Canberra, Australia
+b Center for Remote Sensing and Spatial Information Science, School of Geography, Planning and Architecture, University of Queensland, Brisbane, Au stralia
+abstractarticle info
+Article history:
+Received 1 1 August 2008
+Received in revised form 4 December 2008
+Accepted 6 December 2008
+Keywords:
+Hyperspectral imagery
+Bathymetry retrieval
+Quality control
+Radiative transfer models
+In order to retrieve bathymetry, substratum type and the concentrations of the optically active constituents of the
+water column, an integrated physics based mapping approach was applied to airborne hyperspectral data of
+Moreton Bay, Australia. The remotely sensed data were sub-optimal due to high and mid-level cloud covers.
+Critical to the correct interpretation of the resultant coastal bathymetry map was the development of a quality
+control procedure based on additional outputs of the integrated physics based mapping approach and the
+characteristics of the instrument. These two outputs were: an optical closure term which de ﬁnes differences
+between the image and model based remote sensing signal; and an estimate of the relative contribution of the
+substratum signal to the remote sensing signal. This quality control procedure was able to identify those pixels
+with a reliable retrieval of depth and to detect thin and thick clouds and their shadows, which were subsequently
+masked out from further analysis. The derived coastal bathymetry in depths ranging 4– 13 m for the mapped area
+was within ±15% of boat-based multi-beam acoustic mapping survey of the same area. The agreement between
+the imaging spectrometry and the acoustic datasets varies as a function of the contribution of the bottom visibility
+to the remote sensing signal. As expected, there was greater agreement in shallower clear water (±0.67 m) than
+quasi-optically deep water (±1 .35 m). The quantitative identiﬁcation and screening of the optically deep waters
+and the quasi-optically deep waters led to improved precision in the depth retrieval. These results suggest that the
+physics based mapping approach adopted in this study performs well for retrieving water column depths in
+coastal waters in water depths ranging 4 – 13 m for the area and conditions studied, even with sub-optimal
+imagery.
+Crown Copyright © 2008 Published by Elsevier Inc. All rights reserved.
+1. Introduction
+The ability to accurately estimate water column depth over large
+areas and/or in remote locations is directly relevant to environmental
+management, exploration, defence and research applications. The
+potential to utilise remote sensing to this end has been discussed for
+over 2 decades, but has been mostly limited to empirical approaches
+(Clark et al., 1987; Lyzenga, 1981; Philpot, 1989 ) that are not easily
+transferable across study areas or data types ( Lee et al., 2001; Stumpf
+et al., 2003). Recently, approaches for mapping bathymetry in optically
+shallow water bodies have evolved to non-linear optimization of semi-
+analytical models (Adler-Golden et al., 2005; Albert & Gege, 2006; Lee
+et al., 1999, 2001) and comparative methods of spectral library matching
+(Louchard et al., 2003; Mobley et al., 2005) from hyperspectral data and
+modelled data. In some cases these approaches can also be used to
+produce corrected substratum re ﬂectance spectra and to quantify
+concentration of organic and inorganic water constituents.
+Lee et al. (1999, 1998) developed a semi-analytical model for
+shallow water remote sensing based on the analytical model proposed
+by Maritorena et al. (1994) . Lee et al. (1999, 2001) used an inversion-
+optimization approach to simultaneously derive water depth and
+water column properties from hyperspectral data in coastal waters.
+Adler-Golden et al. (2005) present an algorithm similar to that of Lee
+et al. (2001) . However, it makes the simplifying assumption of con-
+stant water optical properties within the scene. McIntyre et al. (2006)
+presented an application of the Lee et al. (2001) inversion modelling
+approach to clear waters which included a quantitative comparison of
+model-derived depth with high resolution multi-beam acoustic ba-
+thymetry data.
+Several authors recently extended the method developed byLee et al.
+(1999, 2001) by incorporating linear un-mixing of the benthic cover.
+Giardino et al. (2007) used two substrate classes (bare sand and
+submerged macrophytes) for the littoral zone of a lake, whileGoodman
+and Ustin (2007) and Klonowski et al. (2007) integrated a semi-
+Remote Sensing of Environment 1 13 (2009) 755 – 770
+⁎ Corresponding author.
+E-mail address: vittorio.brando@csiro.au (V.E. Brando).
+0034-4257/$ – see front matter. Crown Copyright © 2008 Published by Elsevier Inc. All rights reserved.
+doi:10.1016/j.rse.2008.12.003
+Contents lists available at ScienceDirect
+Remote Sensing of Environment
+journal homepage: www .elsevier.com/locate/rse
+
+analytical inversion model with a linear un-mixing of three substratum
+types for coral reef environments.
+In this work, an enhanced implementation of the inversion/opti-
+mization approach by Lee et al. (1999, 2001) was applied to airborne
+hyperspectral data of a shallow water coastal embayment. The approach
+was used to estimate bathymetry, substratum composition (i.e. frac-
+tional cover of e.g. sand, silt, mud, seagrass and macroalgae) and the
+concentrations of the optically active constituents of the water column,
+including chlorophyll, coloured dissolved organic matter (CDOM) and
+non algal particulate matter (NAP). Fig. 1 presents the schematic ﬂow-
+chart of the integrated physics based mapping approach that includes
+atmospheric correction and an objective process of quality control.
+To overcome the inadequate quality of portions of the imagery due
+the cloud cover in the area, a quality control procedure based on physical
+quantities was developed in order to identify those pixels where reliable
+retrieval of depth could be performed. The quality control procedure was
+based on a measure of optical closure, i.e., the similarity between below-
+surface modelled re ﬂectance and that measured in the image, and a
+quantitative estimate of the contribution of the substratum signal to the
+remote sensing signal.
+The comparison of the depth retrieved from the hyperspectral ima-
+gery with the depth measured during a boat-based multi-beam acoustic
+mapping survey demonstrates the effect of this objective quality control
+procedure. The accuracy and precision of the coastal bathymetry
+retrieval is discussed as a function of the quantitative estimate of the
+contribution of the substratum to the remote sensing signal.
+2. Data and methodology
+2.1. Study site
+The study site is located in Moreton Bay (27°30′S, 153°30′E), a large
+embayment located on the east coast of Australia. The Bay is
+surrounded by shallow banks to the north and protected by Moreton
+and North Stradbroke Islands on the east and southeast sides ( Fig. 2).
+Moreton Bay can be considered a representative example of the range
+of water quality and substratum cover types typically found in coastal
+and coral reef environments. ( Phinn et al., 2005, 2008 ).
+Moreton Bay substratum contains signi ﬁcant areas of unconsoli-
+dated sediments, ranging from ﬁne-silt muds in the western bay to
+silicate sands in the eastern bay. Extensive seagrass beds and macro-
+algae occur throughout the bay, as do bedrock outcrops and fringing
+reefs. Due to the number of creeks and rivers that drain into the
+western part of the Bay and the oceanic openings on its eastern side,
+the water column usually ranges from freshwater in ﬂuenced, and
+often turbid in the western bay, to oceanic water dominated and clear
+blue-green waters of the eastern bay ( Phinn et al., 2005, 2008 ).
+2.2. Image acquisition and processing
+2.2.1. CASI-2 airborne hyperspectral Images
+Airborne hyperspectral imagery was acquired on 28 July 2004 over
+the Eastern Banks area in Moreton Bay ( Fig. 2 A) with a CASI-2
+(Compact Airborne Spectrographic Imager) measuring upwelling
+radiance [µWcm
+− 2sr− 1nm− 1]. The hyperspectral dataset was collected
+as part of a larger project which evaluated the accuracy of various
+image types and image processing approaches for mapping coastal
+ecosystem health indicators ( Phinn et al., 2005, 2008 ).
+Flight-lines were ﬂown within 1 h of low tide, with a pixel size of
+4 × 4 m and a swath of ∼ 2.0 km. The ﬂight-line plan minimized sun
+glint and hotspots by ﬂying in and out of the solar plane ( Dekker et al.,
+2001). The CASI-2 band-set was programmed to have 30 near-
+contiguous spectral bands in the visible-near infrared region (441 –
+847 nm). The band selection of the CASI was designed to optimize the
+signal-to-noise ratio (SNR) across the spectrum by using variable
+bandwidths. The bands in the blue and near infrared region, where the
+sensor has a lower sensitivity, have a bandwidth of ∼ 20 nm, while the
+bands in the 500 – 680 nm range have a ∼ 10 nm bandwidth ( Fig. 3 ).
+Due to the nature of the spectral band con ﬁguration, the full width at
+half maximum (FWHM) is equivalent to the bandwidth as it results
+from a combination of narrow channels with 1.3 nm FWHM.
+2.2.2. Atmospheric and air water interface correction
+As the ﬁrst step of the integrated physics based mapping approach
+(Fig. 1), the ‘ coastal Waters and Ocean MODTRAN-4 Based ATmospheric
+correction’ (‘ c-WOMBAT-c’ ) procedure ( Brando & Dekker, 2003; Phinn
+et al., 2005) was applied to achieve hyperspectral atmospheric correction
+of the CASI-2 imagery. The procedure combines an atmospheric
+inversion from at-sensor-radiance to above water re ﬂectance ( Adler-
+Golden et al., 1998; De Haan et al., 1997 ) with an inversion of the air –
+water interface from above water reﬂectance to subsurface reﬂectance
+(De Haan & Kokke, 1996; De Haan et al., 1997).
+c-WOMBAT-c applies a full MODTRAN-4 atmosphere parameteriza-
+tion and characterisation to retrieve the subsurface remote-sensing
+reﬂectance (rrs,[ sr− 1]) from the CASI-2 at-sensor-radiance. The atmo-
+spheric parameterization for each ﬂight-line was based on radiosonde
+data from the Australian Bureau of Meteorology Station at Brisbane
+Fig. 1.Concept and schematicﬂow chart of the integrated physics based mapping approach
+for estimating bathymetry, substratum composition (i.e. fractional cover of e.g. sand, silt,
+mud, seagrass, macroalgae) and the concentrations of the optically active constituents of
+the water column (C
+CHL, CCDOM, CNAP). All symbols are deﬁned in Table 1.
+756 V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+International Airport to estimate the atmospheric column water
+contents, the actual and the 24 h average wind speed. The estimate of
+ozone content was downloaded for the dates of CASI overﬂights from the
+Total Ozone Mapping Spectrometer— TOMS database ( http://toms.gsfc.
+nasa.gov/ozone/ozone.html). The MODTRAN-4 summer mid-latitude
+atmosphere with navy maritime aerosol model and a horizontal visibility
+of 50 km was used, as this most closely matched the conditions at the
+time the image was taken.
+In c-WOMBAT-c, adjacency effects from photons transferring from
+adjacent pixels to the one being sampled are corrected for by using an
+averaged surface radiance for the surrounding region. This spatially
+weighted image is generated by convolving the input radiance imagery
+Fig. 2. Study area. A) Pseudo true colour composite of the CASI-2 imagery for the western portion of the Eastern Banks. The map is presented with the outlines of the bathymetric
+surveys. B) Pseudo true colour composite of the CASI-2 imagery for the Rous Channel area with the extent of the acoustic bathymetric survey overlaid as the orange thick polygon. The
+image is presented with the bathymetry vectors supplied by the Queensland Department of Transport.
+757V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+with a 1 km2 spatial weighting function (Adler-Golden et al., 1998). The
+code is available from the authors upon request.
+2.2.3. Illumination and geometric correction and cloud masking
+After atmospheric correction, a residual brightness variation across
+each track-line could still be observed in severalﬂight-lines. Cross track
+illumination variation is due to several physical environmental and
+sensor effects such as varying atmospheric path length, Fresnel
+reﬂection of diffuse skylight, camera lens and diaphragm effects,
+vignetting effects, instrument scanning, CCD illumination effects,
+internal scattering in the sensor and other non-uniform illumination
+effects. A cross-track correction for illumination variation was applied to
+remove these distortions. For each ﬂight-line, a Row and Column
+Analysis of Variance (RC-ANOVA) was computed to correct for the
+systematic across-track illumination variation. The means and variances
+of the columns were used to balance each image band to the scene
+statistics (Brando & Dekker, 2003; Datt et al., 2003 ). In a scene that
+covers land, shallow water and deep water targets, scene statistics that
+are calculated over the entire image would not be representative for the
+deeper water targets. Therefore, an“as homogeneous as possible” water
+area of 50 – 100 lines was used as input for the statistics of each ﬂight-
+line. For each spectral band, a 3rd order polynomial was ﬁtted to the
+average value of each column after which an additive column-by-
+column RC-ANOVA correction was performed on the imagery.
+The CASI-2 data were geometrically corrected and geo-referenced by
+the data provider, using data from the aircraft's inertial measurement
+unit and an onboard GPS unit referenced to a GPS base station. Following
+this, a manual adjustment and matching of each ﬂight line to Landsat 5
+Thematic Mapper image collected in August 2004 was performed to
+minimize the residual error in geo-location (Phinn et al., 2006, 2008 ).
+A preliminary masking of the clouds based on their spectral
+properties was attempted but it was not adopted as it showed a low
+accuracy: very shallow portions of the Eastern Banks are very bright
+with reﬂectance properties similar to those of clouds in most spectral
+bands (see Fig. 2B). Thin and thick cloud masking was performed later
+as part of the quality control process of the integrated physics based
+mapping approach (see Sections 2.4.6 and 3.1).
+2.2.4. Environmental dynamic range
+In order to understand the precision and accuracy that can be
+achieved in the estimate of an environmental variable derived from
+reﬂectance with hyperspectral imagery, it is necessary to estimate the
+overall sensitivity of the entire sensor – atmosphere– air– water inter-
+face system for detecting changes in re ﬂectance. The environmental
+Fig. 2 (continued).
+Fig. 3. CASI-2 programmable band set: spectral sensitivity (left axis) and noise equivalent difference in re ﬂectance NEDrrsE (right axis).
+758 V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+noise equivalent re ﬂectance difference (NE ΔrrsE) provides an inte-
+grated measure of sensor signal-to-noise ratio and scene-speci ﬁc
+characteristics ( Brando & Dekker, 2003; Wettle et al., 2004 ). For
+aquatic remote sensing, examples of the latter include atmospheric
+variability, effects from the air – water interface such as swell, wave
+and wavelet induced re ﬂections, and refractions of diffuse and direct
+sunlight (Brando & Dekker, 2003 ).
+The second step of the integrated physics based mapping approach
+(Fig. 1)i st oe s t i m a t eN EΔrrsE in the deepest waters in the CASI-2 mosaic
+in the location identi ﬁed as being the most homogenous using the
+methodology described byWettle et al., (2004). Fig. 3shows that NEΔrrsE
+is lower than 0.00025 [sr− 1]i nt h e5 0 0– 800 nm spectral range, with the
+exception of the very narrow band centred at 760 nm. As distinguishable
+levels of 0.00025 [ sr− 1]a r ed e s i r a b l e(Brando & Dekker, 2003; Dekker
+et al., 2001 ), the quality of this imagery was deemed appropriate for
+further analysis.
+2.3. Acoustic bathymetry data
+As part of the larger project which evaluated the accuracy of various
+forms or image types and image processing approaches for mapping
+coastal ecosystem health indicators (Phinn et al., 2005, 2008), a number
+of underwater acoustical and video sensors were deployed in Moreton
+Bay between 29 August and 5 September 2004 (Siwabessy et al., 2006).
+The ﬁeld equipment used in the survey included a RESON8125 multi-
+beam, a SIMRAD EQ60 single beam and Klein 5500 sidescan sonar
+systems, as well as an underwater video system (Siwabessy, 2005). The
+objective was to establish the domains, in terms of depths and water
+clarity, under which each data-set does and does not function effectively.
+For the bathymetric survey, the RESON 8125 multi-beam survey
+lines were run parallel to the contour in order to get the maximum
+swath coverage in a short time. Accurate navigation and correction for
+motion allowed for stitching of overlapping swath lines and suppres-
+sion of motion artefacts (Siwabessy, 2005). Raw bathymetry data were
+corrected for roll, pitch, yaw and GPS latency, as well as for the tide
+and the refraction. The corrected bathymetry was edited by removing
+bad data points/spikes. The bathymetry data were normalized to the
+Australian Height Datum and then re-sampled to the pixel size of the
+CASI imagery.
+The uncertainty in the depth soundings was likely to be no more
+than a few centimetres, as the errors relate to the tidal model used to
+process the data, the motion sensor errors and the positional accuracy.
+These effects were corrected for whilst processing the bathymetry
+(Siwabessy, 2005).
+Although approximately 82% of the Eastern Banks area is 3.0 m or
+shallower in depth (Phinn et al., 2005, 2008 ), the acoustic bathymetric
+survey for the Rous Channel area was carried out in a channel 5 – 10 m
+deep with a sandy substratum. Fig. 4 presents the bathymetric surface
+derived from the acoustic bathymetric survey for the Rous Channel
+area. The bathymetric surface corresponds to and accurately aligns
+with the rather coarse bathymetry vectors (1, 2, 3, 5, 10 and 20 m
+isobaths) which were based on a compilation of older data and were
+supplied by the Queensland Department of Transport. The acoustic
+Fig. 4. Bathymetric surface derived from the acoustic bathymetric survey for the Rous Channel area. The bathymetry map is presented with the bathymetry vect ors supplied by the
+Queensland Department of Transport.
+Table 1
+Symbols and de ﬁnitions
+Symbol Description Units
+CDOM Coloured dissolved organic matter
+NAP Non algal particles
+C
+CHL Concentration of chlorophyll-a µg ∙L− 1
+CCDOM Measure of coloured dissolved organic matter m − 1
+CNAP Concentration of non algal particles Mg L − 1
+a Total absorption coef ﬁcient, aw + aphy + aCDOM + aNAP
+aw Absorption coef ﬁcient of pure seawater m − 1
+aphy Absorption coef ﬁcient of phytoplankton pigments m − 1
+aCDOM Absorption coef ﬁcient of CDOM m − 1
+aNAP Absorption coef ﬁcient of NAP m − 1
+bb Total backscattering coef ﬁcient, bbw + bbp m− 1
+bbw Backscattering coef ﬁcient of pure seawater m − 1
+bbp Backscattering coef ﬁcient of suspended particles, bbphy + bbNAP m− 1
+bbphy Backscattering coef ﬁcient of phytoplankton particles m − 1
+bbNAP Backscattering coef ﬁcient of NAP m − 1
+aphy⁎ (λ) Chlorophyll-a speci ﬁc absorption spectrum m 2mg−1
+SCDOM Spectral slope constant for CDOM absorption coef ﬁcient nm − 1
+aNAP⁎ (λ0) Speci ﬁc absorption of NAP at the reference wavelength m 2g− 1
+SNAP Spectral slope constant for NAP absorption coef ﬁcient nm − 1
+λ0 Reference wavelength nm
+bbphy⁎ (λ0) Speci ﬁc backscattering of algal particles at the reference
+wavelength
+m2mg− 1
+Yphy Power law exponent for the algal particles backscattering
+coefﬁcient
+–
+bbNAP⁎ (λ0) Speci ﬁc backscattering of NAP at the reference wavelength m 2g− 1
+YNAP Power law exponent for NAP backscattering coef ﬁcient –
+rrs Subsurface remote-sensing re ﬂectance for an optical shallow
+water body
+sr− 1
+rrs
+dp Subsurface remote-sensing re ﬂectance over a hypothetical
+optically deep water column
+sr− 1
+rrs
+input Measured subsurface remote-sensing re ﬂectance sr− 1
+rrs
+model Modelled subsurface remote-sensing re ﬂectance sr− 1
+rrs
+dp_model Optically deep component of rrs
+model sr− 1
+NEΔrrsE Noise equivalent difference in re ﬂectance sr− 1
+A Substratum albedo (irradiance re ﬂectance) –
+Kd Vertical attenuation coef ﬁcient for diffuse downwelling light m −1
+κB Vertical attenuation coef ﬁcient for diffuse upwelling light
+originating from the bottom
+m−1
+κC Vertical attenuation coef ﬁcient for diffuse upwelling light
+originating from each layer in the water column.
+m−1
+Δ Optimization residuum –
+SD Spectral substratum detectability sr− 1
+SDI Substratum detectability index –
+759V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+bathymetric survey ( Fig. 4 ) will be used for validation of the bathy-
+metry retrieved with the integrated physics based mapping approach
+applied in this study to the hyperspectral imagery.
+2.4. Retrieval of bathymetry, substratum composition and the optically
+active constituents
+The third and pivotal step of the integrated physics based mapping
+approach (Fig. 1) is a physics based retrieval of bathymetry, substratum
+composition (i.e. fractional cover of e.g. sand, silt, mud, seagrass and
+macroalgae) and the concentrations of the optically active constituents
+of the water column (chlorophyll, CDOM and NAP) from therrs imagery.
+To this aim, the inversion/optimization method byLee et al. (1999, 2001 ,
+1998) was enhanced in order to: 1) retrieve the concentrations of
+optically active constituents in the water column (chlorophyll-a, CDOM
+and NAP), 2) account for more than one substratum cover type and 3) to
+estimate the contribution of the substratum to the remote sensing
+signal. This implementation, called SAMBUCA (the semi-analytical
+model for bathymetry, un-mixing, and concentration assessment), is
+available from the authors upon request.
+2.4.1. Principles of the physics based method
+At the core of the inversion/optimization method byLee et al. (1999,
+2001 , 1998)lies an analytical expression for rrs for an optical shallow
+water body (Maritorena et al., 1994):
+rrs = rdp
+rs + exp −KdHðÞ A exp −κBHðÞ −rdp
+rs exp −κC HðÞ
+hi
+ð1Þ
+where, rrs
+dp is subsurface remote-sensing reﬂectance over a hypothetical
+optically deep water column;H is the water depth;A, the bottom albedo
+(substratum re ﬂectance); Kd, the vertical attenuation coef ﬁcient for
+diffuse downwelling light, κB, the vertical attenuation coef ﬁcient for
+diffuse upwelling light originating from the bottom; andκC,t h ev e r t i c a l
+attenuation coefﬁcient for diffuse upwelling light originating from each
+layer in the water column ( Table 1). Note that the attenuation of the
+upward ﬂux is not equivalent to the attenuation of the downward ﬂux
+(Kd). Attenuation of the upward ﬂux must further be separated into a
+component originating from the water column (κC) and that originating
+from the bottom ( κB)( Maritorena et al., 1994 ). By relating the four
+quantitiesrrs
+dp,K d, κB and κC to absorption and backscattering via a series
+of semi-analytical relationships, Lee et al. (1999, 2001 , 1998)modelled
+the rrs spectrum as a function of ﬁve independent variables (represent-
+ing properties of water column and bottom):
+rrs = fP ;G;X;B;HðÞ ð 2Þ
+where P, G, X,a n d B are scalar values and represent absorption
+coefﬁcients of phytoplankton and gelbstoff (coloured dissolved organic
+matter plus detritus), backscattering coefﬁcient of suspended particles,
+and bottom reﬂectance at a reference wavelength, respectively; andH is
+the bottom depth.
+2.4.2. Semi analytical model for bathymetry unmixing and concentration
+assessment (SAMBUCA)
+In the inversion-optimization scheme in SAMBUCA the modelled
+subsurface remote-sensing re ﬂectance ( rrs
+model) is compared to the
+measured subsurface remote-sensing re ﬂectance ( rrs
+input) which was
+obtained from each pixel in the remote sensing image. The set of
+variables that minimizes the difference between these two spectra is
+used to estimate the environmental variables being sought, e.g. water
+column depth, substratum composition or the concentrations of the
+optically active constituents of the water column.
+The extraction of environmental information from measured reﬂec-
+tance spectra constitutes a radiative transfer inverse problem. Inverse
+problems are notoriously difﬁcult because of potential non-uniqueness
+issues (Mobley et al., 2005 ). It is often necessary to constrain inverse
+problems so as to guide the inversion to the correct solution. Such
+constraints often take the form of simplifying assumptions about the
+underlying physical or mathematical problem, or of added environ-
+mental information. For the inversion-optimization in SAMBUCA, the
+Downhill Simplex method was adopted, whilst ranges for variables to be
+optimized were constrained to reduce the occurrence of spectral
+ambiguities (Wettle et al., 2005; Wettle & Brando, 2006).
+In SAMBUCA, the algorithm by Lee et al. (1999, 2001 , 1998) was
+modiﬁed to retrieve the concentrations of optically active constituents in
+the water column (chlorophyll-a, CDOM and NAP). The absorption and
+backscattering coefﬁcients are described as the sum of the contributions
+of N constituents and a constant coefﬁcient for pure water:
+a = aw + ∑
+N
+j =1
+aT
+j Cj ; bb = bbw + ∑
+N
+j =1
+bT
+bjCj ð3Þ
+where aw and bbw are the absorption and backscattering of pure water
+(Morel, 1974; Pope & Fry, 1997 ), aj⁎.and bbj⁎ are the speci ﬁc inherent
+optical properties (SIOPs) of jth constituent with concentration Cj.I n
+the formulation of Eq. (3), CDOM has no backscattering term
+associated with it, and aCDOM (440 nm) represents the concentration
+of CDOM.
+The non-water absorption terms are parameterized as a known
+shape with an unknown magnitude:
+aphy λðÞ = CCHL d aT
+phy λðÞ ð 4Þ
+aCDOM λðÞ = CCDOMd aT
+CDOM λ0ðÞ exp −SCDOM λ−λ0ðÞ½/C138 ð 5Þ
+aNAP λðÞ = CNAPd aT
+NAP λ0ðÞ exp −SNAP λ−λ0ðÞ½/C138 ð 6Þ
+where CCHL is the concentration of chlorophyll-a and aphy⁎(λ) is the
+chlorophyll-a speci ﬁc absorption spectrum. As the concentration of
+CDOM ( CCDOM) is represented by aCDOM (440 nm), the reference
+wavelength λ0 was set at 440 nm, SCDOM is the spectral decay constant
+for CDOM absorption coef ﬁcient and aCDOM⁎ (λ0) is set to 1. CNAP is the
+concentration of NAP; aCDOM⁎ (λ0) is the speci ﬁc absorption of NAP at
+the reference wavelength, and SNAP is the spectral slope constant for
+NAP absorption coef ﬁcient; and the reference wavelength λ0 was set
+at 440 nm for NAP absorption coef ﬁcient.
+The non-water backscattering terms are parameterized as follows:
+bbp = bbphy + bbNAP ð7Þ
+bbphy λðÞ = CCHLd bT
+bphy λ0ðÞ λ0
+λ
+/C18/C19 Yphy
+ð8Þ
+bbNAP λðÞ = CNAPd bT
+bNAP λ0ðÞ λ0
+λ
+/C18/C19 YNAP
+ð9Þ
+where bbphy⁎ (λ0) is the speci ﬁc backscattering of algal particles at the
+reference wavelength, Yphy, the power law exponent for the algal
+particles coefﬁcient; bbNAP⁎ (λ0) is the speci ﬁc backscattering of NAP at
+the reference wavelength, and YNAP, the power law exponent for NAP
+backscattering coef ﬁcient. The reference wavelength λ0 was set at
+542 nm for both algal and non algal particle backscattering coefﬁcient.
+In SAMBUCA, the algorithm by Lee et al. (1999, 2001, 1998) was
+modiﬁed to account for more than one substratum cover type in a
+pixel or spectrum by expressing the bottom albedo A(λ) as a linear
+combination of two substrata:
+A λðÞ = qijAi λðÞ +1 −qij
+/C0/C1
+A λðÞ ð 10Þ
+where qij represents the fractional cover of substratum i and
+substratum j within each pixel, Ai(λ) and Aj(λ) are the albedos of
+substratum i and j, respectively. When solving for more than two
+760 V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+cover types, SAMBUCA cycles through a given spectral library,
+retaining those two substrata and their estimated fractional cover qij
+which achieve the best spectral ﬁt.
+In summary, the complete model parameterization of Eq. (1) for
+SAMBUCA is:
+rmodel
+rs = f CCHL;CCDOM;CNAP;H;qij;Ai λðÞ ;Aj λðÞ ;SCDOM;SNAP;
+YPHY;YNAP;aT
+PHY λðÞ ;aT
+NAP λ0ðÞ ;bT
+bPHY λ0ðÞ ;bT
+bNAP λ0ðÞ
+/C18/C19
+: ð11Þ
+2.4.3. The parameterization of SAMBUCA
+The parameterization of the semi-analytical model (Eq.(1 1)) relies
+on ﬁeld sampling of the optical properties of the water body of
+interest. When this is not possible, the semi-analytical model (Eq. (1 1))
+can be parameterized with appropriate values from the literature. For
+this study, inherent and apparent optical properties of Moreton Bay
+waters in winter were measured as part of a ﬁeldwork campaign
+undertaken to coincide with image acquisition and other ﬁeld surveys
+from 27th of July to the 3rd of August 2004. In-situ absorption,
+attenuation, backscattering, reﬂectance and vertical attenuation were
+measured at 20 locations in the bay ( Phinn et al., 2006 ), and water
+samples were collected for measuring in vivo absorption of CDOM,
+chlorophyll and NAP, as well as the NAP and chlorophyll concentra-
+tions. All these measurements were carried out with the same in-
+struments and laboratory methods described in Oubelkheir et al.,
+(2006) and Phinn et al., (2006) .R e ﬂectance spectra of substratum,
+benthic algal species and epiphytic algal and invertebrate species were
+measured as in Roelfsema et al. (2006) .
+Based on these ﬁeld data, SAMBUCA was con ﬁgured to estimate
+the concentrations of optically active constituents in the water column
+(chlorophyll-a, CDOM and NAP), water column depth, and benthic
+substratum composition that produces the best ﬁt between modelled
+and measured rrs. These ﬁve environmental parameters are solved for
+on a pixel-by-pixel basis.
+Table 2 reports the allowed optimization ranges for the chlo-
+rophyll, CDOM, and NAP concentrations, and the ﬁxed values for
+seven scalar parameters ( SCDOM, SNAP, aNAP⁎ (440 nm), bbphy⁎ (542 nm),
+bbNAP⁎ (542 nm), Yphy and YNAP) while the chlorophyll-a speci ﬁc
+absorption spectrum aphy⁎ (λ) is presented in Fig. 5 A. The values of
+the SIOP parameters for this study (Table 2, Fig. 5A) are similar to those
+reported previously for Moreton Bay and other Australian coastal
+waters ( Brando & Dekker, 2003; Oubelkheir et al., 2006; Qin et al.,
+2007). Yphy and YNAP have the same value as they were estimated from
+the in situ particulate backscattering measured using a HydroScat-6
+according to Oubelkheir et al. (2006) .
+In the area of interest of this study, where the acoustic survey data
+were available for validation (namely Rous Channel, Fig. 2B), only two
+bare substrata were identi ﬁed: brown mud and bright sand ( Phinn
+et al., 2006; Phinn et al., 2008; Siwabessy, 2005). Hence, as the focus of
+this work was to estimate bathymetry from hyperspectral imagery,
+SAMBUCA was run with only two substrata ( Fig. 5 B) to expedite the
+inversion.
+2.4.4. Measuring the “optical closure ”, or goodness-of- ﬁt, between the
+modelled and actual image re ﬂectance values
+In the inversion-optimization scheme in SAMBUCA, rrs
+model is com-
+pared to rrs
+input using a goodness-of- ﬁt or, error function. The set of
+variables that minimizes the difference between these two spectra is
+used to estimate the environmental variables being sought, e.g. water
+column depth, substratum composition or the concentrations of the
+optically active constituents of the water column.
+The optimization residuum, Δ, is the measure of the difference bet-
+ween the measured and modelled spectra. In SAMBUCA Δ,c a nb e
+estimated according to either a spectral magnitude matching function
+(e.g. Least squares inAlbert & Gege, 2006; Lee et al., 1999, 2001; Mobley
+et al., 2005 ) or spectral shape matching function (e.g. Spectral Angle
+Mapper in Kruse et al., 1993) or as a hybrid formulation that combines
+the spectral matching and the least squares minimum to balance the
+requirements for spectral shape and magnitude matching:
+Δ = α T LSQ ð12Þ
+where, α[sr− 1] is the spectral angle between reference spectra and the
+spectra of the pixel in question as de ﬁned in the Spectral Angle
+Mapper (SAM, Kruse et al., 1993 )b y :
+α = cos−1
+∑
+N
+i =1
+w λiðÞ T rmodel
+rs λiðÞ Trinput
+rs λiðÞ
+/C16/C17
+∑
+N
+i =1
+w λiðÞ Trmodel
+rs
+/C0/C1 2
+/C20/C21 1=2
+∑
+N
+i =1
+w λiðÞ Trinput
+rs λiðÞ
+/C16/C17 2/C20/C21 1=2 ð13Þ
+and LSQ is the Least Square Distance:
+LSQ =
+∑
+N
+i =1
+w λiðÞ T rmodel
+rs λiðÞ −rinput
+rs λiðÞ
+hi 2/C20/C21 1=2
+∑
+N
+i =1
+w λiðÞ Trinput
+rs λiðÞ
+: ð14Þ
+The weighting function, w(λ), can be introduced for both LSQ and
+α to weigh the contribution of different wavelength bands.
+One of the primary advantages of α is that spectral angle is
+insensitive to differences in albedo, i.e. the magnitude of the measured
+and modelled spectrum. The spectral angle only measures differences
+in spectral shape, and spectral magnitude is measured by the length of
+each vector ( Dennison et al., 2004; Kruse et al., 1993 ). Since the
+residual error is partially dependent on the re ﬂectance of each band
+within the modelled spectrum, LSQ will be partially dependent on the
+magnitude of the modelled re ﬂectance. As the magnitude of the
+modelled spectrum increases, LSQ will also increase ( Dennison et al.,
+2004).
+To assess the spectral match for the inversion, the hybrid
+formulation (Eq.(12)) for Δ was adopted, as it combines the strengths
+of spectral angle mapping with the strengths of a minimum distance
+classiﬁer, ensuring that the resultant spectrum rrs
+model has the
+appropriate magnitude and shape as the input spectrum rrs
+input.I n
+this study, w(λ) was set to 1/NE ΔrrsE to discount the wavelengths
+where the signal is less accurate or noisier.
+As a result of SAMBUCA's inversion-optimization scheme, Δ can be
+used as a measure of the goodness-of- ﬁt, between the measured and
+modelled spectra (i.e. the optical closure). In other words, each set of
+retrieved environmental variables is assigned a con ﬁdence rating
+based on SAMBUCA's ability to model a given subsurface re ﬂectance
+spectra.
+2.4.5. Contribution of the substratum to the remote sensing signal –
+substratum detectability index
+In SAMBUCA, the algorithm byLee et al. (1999, 2001, 1998)has been
+modiﬁed to estimate the contribution of the substratum to the sub-
+surface remote-sensing reﬂectance signal by comparing the modelled
+Table 2
+SAMBUCA parameterization and optimization ranges
+Parameter Fixed value Optimization range
+CCHL 0.7 (0.4 – 1.0)
+CCDOM 0.08 (0.04 – 0.1 1)
+CNAP 2.8 (1.0– 3.3)
+SCDOM 0.0157
+SNAP 0.0106
+aNAP⁎ (440 nm) 0.0048
+abphy⁎ (542 nm) 0.00038
+Yphy 0.681
+bbNAP⁎ (542 nm) 0.0054
+YNAP 0.681
+761V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+spectrum using an optically deep system (rrs
+dp_model, i.e. the term indicated
+as rrs
+dp in Eq. (1)), and the modelled spectrum for an optical shallow water
+body as generated by SAMBUCA ( rrs
+model). Fig. 6 provides a graphical
+illustration of the contribution of the substratum to the remote sensing
+signal for two pixels extracted from the imagery by comparingrrs
+dp_model
+and rrs
+model. Fig. 6A presents an example of optically shallow waters where
+the signal from the substratum is directly measurable, while Fig. 6 B
+presents an example where the signal from the substratum is small and
+diffuse and close to the noise levels in the imagery.
+To provide a quantitative indication of the contribution of the
+substratum to the subsurface remote-sensing re ﬂectance signal of the
+water body, we introduce SD(λ), the spectral substratum detectability:
+SD λðÞ = rmodel
+rs −rdp model
+rs
+/C16/C17
+=NEΔrrsE : ð15Þ
+This quantity is sensor dependent and scene dependent: it
+quantiﬁes the contribution of the substratum to the subsurface
+remote-sensing re ﬂectance signal for a given sensor as it uses the
+noise equivalent difference in re ﬂectance (NEΔrrsE) as a scaling factor.
+As can be shown by rearranging Eq. (1):
+SD = exp −KdHðÞ A exp −κBHðÞ −rdp model
+rs exp −κC HðÞ
+hi/C16/C17
+=NEΔrrsE : ð16Þ
+The SD(λ) is function of the vertical attenuation coef ﬁcients (Kd,Kg
+and Kc), noise equivalents.
+Furthermore, we introduce the substratum detectability index
+(SDI) de ﬁned as the absolute value of the spectral substratum
+detectability for the band of maximum penetration:
+SDI = max jrmodel
+rs −rdp model
+rs j=NEΔrrsE
+/C16/C17
+ð17Þ
+Fig. 6 (C, D) illustrates the derivation of the spectral substratum
+detectability (SD(λ)) and the substratum detectability index (SDI) from the
+two modelled spectra resulting from the inversion optimization (rrs
+model
+and rrs
+dp_modelin Fig. 6(A, B)). For the optically shallow water pixel (Fig. 6C)
+the signal from the substratum |rrs
+model− rrs
+dp_model| is larger than 0.0005 in
+the 500– 600 nm spectral range, and SD(λ) is higher than 5 in the same
+range, with a maximum of 15 at ∼ 580 nm (i.e. SDI = 15). In Fig. 6D, the
+signal from the substratum is small and diffuse and | rrs
+model− rrs
+dp_model| is
+larger than 0.0005 only at 500 nm, SD(λ) is therefore equal to 1 or 2 in the
+480– 5 8 0s p e c t r a lr a n g e ,w i t ham a x i m u mo f2a t∼ 500 nm (i.e. SDI = 2).SDI
+allows three classes of waters to be identiﬁed in the imagery:
+•“ optically shallow waters ” where the signal from the substratum is
+directly measurable and the substratum signal at the surface is more
+than 5 NE ΔrrsE at the band of maximum penetration (SDI N ∼ 5, e.g.
+Fig. 6(A, C));
+•“ quasi-optically deep waters ”, where the contribution from the
+substratum is weak and the substratum signal at the surface is
+between 1 and 5 NEΔrrsE (i.e. 1b SDIb 5, e.g. Fig. 6(B, D)); and
+Fig. 5. Spectral parameterization for SAMBUCA. A) Chlorophyll-a speci ﬁc absorption spectrum aphy⁎ (λ). B) SAMBUCA's Spectral library of benthic substrata.
+762 V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+Fig. 6. Graphical representation of SAMBUCA's main spectral quantities for two pixels extracted from the imagery. rrs
+input is the measured remote-sensing irradiance re ﬂectance; rrs
+model is the modelled subsurface remote-sensing re ﬂectance
+resulting from the inversion optimization of rrs
+input; rrs
+dp_model is the optically deep component of rrs
+model; SD is spectral substratum detectability. a and c present an example of “optically shallow waters” where the signal from the substratum is
+directly measurable ( H = 6.9 m, SDI = 15); while b and d present an example of “quasi optically deep waters ” where the signal from the substratum is small and diffuse ( H = 10.7 m, SDI = 2).
+763V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+•“ optically deep waters ”, where no signal from the substratum is
+measurable (i.e. SDI = 0).
+For optically deep waters (i.e. SDI= 0) the estimate of depth is not
+possible as no signal from the substratum is measurable. Because of that,
+the retrieved values of the water depth from the inversion/optimization
+can be any of the values deeper than the depth that sets SDI to 0, leading
+to an over-estimate of the real depth for those pixels. To retrieve an“as
+shallow as possible” depth when an optically deep solution is encoun-
+tered at the end of a SAMBUCA inversion optimization, a secondary
+iteration was introduced. The retrieved depth for the optically deep
+pixels is iteratively decreased while maintaining SDI = 0. This secondary
+iteration ensures the retrieval of an“as shallow as possible” depth value
+for each pixel.
+It is worth mentioning that both SD( λ) and SDI are sensor- and
+scene-dependent and they could be used to compare the contribution
+of the substratum to the remote sensing signal for different sensors or
+imagery acquired in different environmental conditions.
+2.4.6. Integrating optical closure and SDI to exclude inappropriate data
+The fourth step of the integrated physics based mapping approach
+(Fig. 1) is an objective process of quality control of the raw SAMBUCA
+output. This is based on the combined analysis of two ancillary variables
+of the SAMBUCA output, the measure of optical closure (i.e. the
+Fig. 7. Process of quality control of the SAMBUCA depth retrieval from CASI-2 image for the Rous Channel area. A) Map of the optimization residuum (D, lower values indicate a good ﬁt).
+B) Map of substratum detectability index (higher values indicate a higher signal from the substratum). C) Guide to the interpretation of the SAMBUCA inversion of CASI-2 image for the Rous
+Channel area. The maps are overlaid with the extent of the acoustic bathymetric survey and the bathymetry vectors supplied by the Queensland Department of Transport.
+764 V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+optimization residuum, Δ) and the map of substratum detectability
+index (SDI). By de ﬁning a threshold of the optimization residuum,
+Δthresh, it is possible to identify the pixels with a good or poor spectral
+match for the inversion, while the substratum detectability index (SDI)
+indicates whether the pixels are optically deep or optically shallow. The
+combined use of these additional outputs enables the identi ﬁcation of
+four classes of pixels:
+• pixels with a poor optical closure (i.e. Δ N Δ
+thresh) and optically
+shallow or quasi-optically deep (i.e. with SDI N 1);
+• pixels with a poor closure and optically deep bi.e. with SDI = 0);
+• pixels with a good closure (i.e. Δ b Δthresh) and optically deep;
+• pixels with a good closure and optically shallow or quasi-optically
+deep.
+Only the pixels belonging to the last class should be used for further
+analysis of the bathymetry retrieval, since the good optical closure
+ensures that a good spectral match for the inversion was attained, while
+SDIN 1 ensures that the estimate of depth is possible as the signal from
+the substratum is measurable. This systematic quality control procedure
+facilitates the use of sub-optimal remote sensing imagery as it assesses
+objectively the data quality on a pixel-by-pixel basis.
+3. Results and discussion
+SAMBUCA was applied to the CASI-2 imagery for the Rous Channel
+for the retrieval of depth, concentrations of optically active constituents
+in the water column (chlorophyll-a, CDOM and NAP) and substratum
+composition. To demonstrate the effect of the physics based quality
+control procedure (Fig. 7 and Table 3), the bathymetry output will be
+shown before and after the procedure ( Figs. 8 and 10 )f o l l o w e db yt h e
+comparison of the retrieved depth with the acoustic depth ( Figs. 9
+and 1 1). The maps of concentrations of chlorophyll, CDOM and NAP and
+the substratum composition as retrieved by SAMBUCA will be not
+shown or discussed in this paper for the sake of brevity. The retrieved
+ranges of CCHL, CCDOM,a n d CNAP were respectively 0.4– 1. 0μgL − 1,0 . 0 4–
+0. 1 1 m− 1 and 1 .0– 3.3 mg L− 1. The retrieved substratum albedo A(550 nm)
+ranged between 8 and 40%.
+Fig. 8 presents the bathymetric surface derived from CASI-2 image
+for the Rous Channel area. This map is the raw SAMBUCA output as it
+presents the estimated bathymetry for all the pixels in the imagery
+before quality control. Overall, this bathymetric surface is accurately
+aligned with the bathymetry vectors supplied by the Queensland
+Department of Transport which were overlaid on all the maps for all of
+the isobaths. Furthermore, a visual comparison of the bathymetric
+surface derived from the CASI-2 image and the bathymetric surface
+derived from the acoustic bathymetric survey (Figs. 8 and 4respectively)
+show a generally good agreement. The effects of the sub-optimal quality
+of the CASI-2 imagery on the depth retrieval can be seen in the eastern
+portion of the imagery which is affected by thick clouds. It is mapped as
+exposed ( Z b 0 m AHD; Australian Height Datum). Furthermore, thin
+clouds in the central portion of the imagery are mapped as very shallow
+(Z b 3 m AHD).
+3.1. Quality control procedures of the SAMBUCA output
+The process of quality control of the raw SAMBUCA bathymetry
+output involves the combined analysis of two ancillary output
+variables: the measure of optical closure (i.e. the optimization
+residuum, Δ, Fig. 7 A) and the map of substratum detectability index
+(SDI, Fig. 7B).
+A visual analysis of the map of optical closure (Fig. 7A) identiﬁes areas
+of the image where the presence of thick or thin clouds (as evident in
+Fig. 2B) creates a poor optical closure (i.e.Δ N ∼ 0.002). These pixels have
+spectra that SAMBUCA cannot solve appropriately, leading to a poor
+optical closure. As stated in Section 2.2.3, a preliminary supervised
+masking of the clouds based on their spectral properties was attempted
+but it was not adopted as it showed a low accuracy. Based on the visual
+analysis of the map of the optimization residuum,Δ, the threshold of the
+optimization residuum,Δthresh was set to 0.002 in order to separate good
+and poor optical closure. Δthresh is sensor and scene dependent as Δ,
+incorporates NEΔrrsE as weighting function to discount the wavelengths
+where the signal is less accurate or noisier.
+The map of substratum detectability index ( Fig. 7 B) identi ﬁes the
+areas that are retrieved by the model as optically deep (i.e. where no
+effects of the substratum are measurable) and those where there are
+varying levels of bottom visibility.
+Table 3
+Process of quality control of the SAMBUCA depth retrieval from CASI-2 image for the
+Rous Channel area
+Poor optical closure
+(i.e. Δ N 0.002)
+Good optical closure
+(i.e. Δ b 0.002)
+Optically deep
+(i.e. with SDI = 0)
+Pixels occurring in few small
+patches in the northern portion
+of the imagery (they could be
+cloud shadows)
+Pixels occurring at the knee-
+bend in sonar coverage and
+around the patch of pixels with
+a poor closure and optically
+deep in the western portion of
+the imagery
+Optically shallow
+(i.e. with SDI N 1)
+Pixels occurring in
+correspondence with the thick
+clouds in the eastern portion of
+the imagery
+Pixels corresponding to the
+overlap of the pixels mapped
+out in brighter tones in Fig. 7 A
+and B
+Combination of the optimization residuum and the substratum detectability index (SDI).
+Fig. 8. Non quality controlled bathymetric surface derived from CASI-2 image for the Rous Channel area with the extent of the acoustic bathymetric survey ove rlaid as the purple
+polygon. The bathymetry map is presented with the bathymetry vectors supplied by the Queensland Department of Transport.
+765V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+By combining the analysis of the map of optical closure ( Fig. 7 A)
+and the map of index of optical depth ( Fig. 7 B), the four classes of
+pixels identi ﬁed in Section 2.4.6, can be observed in Fig. 7 C. Table 3
+provides details of the pixels occurring in each of those classes in the
+CASI-2 scene. The pixels with a good closure (i.e. Δ b 0.002) and
+optically shallow (i.e. with SDI N 1), correspond to the overlap of the
+pixels mapped out in brighter tones in Fig. 7A and B. Only these pixels
+should be used for further analysis of the bathymetry retrieval, since
+the good optical closure ensures that a good spectral match for the
+inversion was attained, SDI N 1 ensures that the estimate of depth is
+possible as the signal from the substratum is measurable. The
+combined use of the additional output enabled the detection and
+masking of thin and thick clouds as well as cloud shadows, as these
+pixels have spectra that SAMBUCA cannot solve appropriately and
+hence it would lead to a poor optical closure.
+3.2. Effects of the quality control on the SAMBUCA bathymetric output
+Fig. 9A presents the scatter-plot of the depth estimated from CASI-2
+image (before quality control) versus the depth estimated with the
+acoustic bathymetric survey for the Rous Channel area.Fig. 9B presents
+the distribution of the difference of the depth as estimated from CASI-2
+image with the acoustic bathymetric survey for the Rous Channel area.
+For both charts the points are colour coded according to the four classes
+mapped in Fig. 7C. In Fig. 9 it is possible to identify the four classes of
+Fig. 7Ca n dTable 3 as three separate clusters:
+i) the optically shallow pixels with poor closure and, occurring in
+correspondence with the thick clouds in the eastern portion of
+the imagery are mapped as exposed ( Z = 0.1 m AHD) and the
+thin clouds in the central portion of the imagery, are mapped as
+very shallow ( Z b 3 m AHD);
+ii) the optically deep pixels (SDI = 0, with and without a good optical
+closure) are overestimating the depth by 3– 10 m;
+iii) the optically shallow pixels (i.e. for high values of SDI) with a good
+optical closure where the bathymetry estimates are centred
+around the 1:1 line.
+Fig. 10 presents the quality controlled SAMBUCA output, where
+only the pixels with a good closure (i.e. Δ b 0.002) for optically shallow
+waters (i.e. with SDI N 1) are presented. A visual comparison of Fig. 10A
+and Fig. 4 show that most of the pixels in the SAMBUCA inversion are
+in the 5– 10 m class with a smaller number of pixels in the 3 – 5 m class.
+Fig. 9. Comparison of depth estimated from CASI-2 image with the depth estimated with the acoustic bathymetric survey for the Rous Channel area A) Scatterplo t of the depth
+estimated from CASI-2 image versus the depth estimated with the acoustic bathymetric survey. B) Histogram of the error in the depth estimated from CAS I-2 image. The points are
+colour coded according to the classes mapped in Fig. 7 C.
+766 V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+These retrieved depths correspond to and accurately aligns with both
+the acoustic data and the bathymetry vectors supplied by the
+Queensland Department of Transport ( Fig. 4).
+This systematic quality control procedure facilitates the use of sub-
+optimal remote sensing imagery as it assesses objectively the data
+quality on a pixel-by-pixel basis.
+3.3. Effects of the substratum contribution to the remote sensing signal
+on the precision and accuracy of the bathymetric retrieval
+Since the substratum detectability index (SDI) provides an estimate
+of the contribution of the substratum to the sub-surface remote sensing
+signal, a higher SDI is a measure of increased substratum visibility. To
+investigate the effects of the optical depth on the precision and accuracy
+of the bathymetric retrieval using SAMBUCA and hyperspectral data, the
+comparison of the image-based depth retrieval to the acoustics-based
+depth retrieval is divided into four classes of SDI, representing an
+increase in bottom visibility as mapped in Fig. 10B.
+Fig. 1 1A presents the scatter-plot of the depth estimated from CASI-2
+image versus the depth estimated with the acoustic bathymetric survey
+for the Rous Channel area for four SDI classes. The points are colour coded
+according to the classes mapped in Fig. 10B. Fig. 1 1B presents the dis-
+tribution of the difference between the depths as estimated from the
+CASI-2 images and the acoustic bathymetric survey for the Rous Channel
+area. Fig. 1 1shows that the classes with lower SDI are able to map to
+deeper depth but with a lower level of precision. Conversely an increased
+substratum visibility (classes with a higher SDI) leads to a more precise
+depth retrieval. The“quasi-optically deep waters”,i . e .t h ec l a s sw i t hS D I
+values ranging from 1 to 5, show a tendency to overestimate the depth in
+similar fashion to the optically deep pixels inFig. 9. For this class, there is
+some effect of the bottom visibility on the remote sensing signal, but a
+lower signal to noise ratio creates a low level of precision in the estimate
+of depth.
+Three different statistics can be used to describe precision and
+accuracy of the depth retrieval:
+Bias ˆz;z
+/C16/C17
+= mean ˆz
+/C16/C17
+−mean zðÞ ð 18Þ
+MedianDifference ˆz;z
+/C16/C17
+= median ˆz
+/C16/C17
+−median zðÞ ð 19Þ
+RMSE ˆz
+/C16/C17
+=
+ﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃﬃ ﬃ
+Var ˆz
+/C16/C17
++ Bias ˆz;z
+/C16/C17/C16/C17
+2
+r
+ð20Þ
+where z is the true depth (i.e. the acoustic survey) and z is the depth
+estimated by SAMBUCA. Bias [m] and MedianDifference[m] provide an
+indication of accuracy in the measurement, while RMSE (Root Mean
+Square Error, [m]) describes the “overall accuracy” encompassing both
+random errors (i.e. affecting the precision of the measurement) and
+systematic errors (i.e. affecting the accuracy of the measurement).
+Table 4 reports the precision and accuracy of the depth retrieval in
+the Rous Channel. As the comparison of Fig. 9 and Fig. 1 1showed, Bias,
+MedianDifference and RMSE for all the pixels before the quality control
+procedure ( − 2.02 m, − 0.63 and 3.85 m), decrease dramatically to
+0.07 m, 0.16 m and 0.95 m for the pixels identi ﬁed as having “good
+optical closure” and being optically shallow.
+The bathymetric retrieval shows a Bias compared to the acoustic
+survey of 0.07 m for all the quality controlled pixels, a higher Bias of
+Fig. 10. Quality controlled results derived from CASI-2 image for the extent of the acoustic bathymetric survey for the Rous Channel area. A) Quality controll ed bathymetric surface.
+B) Map of substratum detectability index (SDI). Only the pixels with a good closure (i.e. Δ b 0.002) and not optically deep (i.e. SDI N 0) are represented. The maps are presented with the
+bathymetry vectors supplied by the Queensland Department of Transport.
+767V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+0.43 m for the quasi-optically deep waters, and a Bias ranging
+between − 0.01 and − 0.07 m for the remaining classes. An increased
+substratum visibility (classes with a higher SDI) lead to a lower RMSE,
+hence a more accurate retrieval (1.35 m or ± 15% for 1 b SDI b 5 and up
+to 0.67 m or ± 13% for SDI N 15). This is controlled by the precision of
+the estimates, as both Bias and MedianDifference do not change sig-
+niﬁcantly for the three shallow water classes. To our knowledge, the
+quantitative identi ﬁcation and screening of the “optically deep
+waters” and the “quasi-optically deep waters ” was never attempted
+prior to this research, leading to a degraded accuracy in the depth
+retrievals for previous studies as the waters became deeper or more
+turbid (e.g. Goodman & Ustin, 2007; Lee et al., 2007; McIntyre et al.,
+2006; Sandidge & Holyer, 1998; Stumpf et al., 2003 ).
+The precision of estimating bathymetry from remote sensing data
+is, as expected, a function of the contribution of the substratum to the
+subsurface remote-sensing reﬂectance signal, as quantiﬁed by SDI. For
+the “quasi optically deep waters” a lower signal to noise ratio creates a
+low level of precision in the estimate of depth. Most likely, the
+Fig. 1 1.Comparison of the quality controlled depth estimated from CASI-2 image versus the depth estimated with the acoustic bathymetric survey for the Rous C hannel area for four
+substratum detectability index (SDI) classes. A) Scatter-plot of depth estimated from CASI-2 image versus the depth estimated with the acoustic bat hymetric survey. B) Histogram of
+the error in the depth estimated from CASI-2 image for the Rous Channel area for the four SDI classes. Only the pixels with a good closure (i.e. Δ b 0.002) and not optically deep (i.e.
+with an SDI N 0) are represented as in Fig. 10. The points are colour coded according to the classes mapped in Fig. 10B.
+Table 4
+Statistics of the accuracy of the depth retrieval in the Rous Channel before and after the quality control procedure and for four classes of substratum detectability index (SDI)
+All points before quality
+control
+All point after quality
+control
+After quality control
+1 b SDI b 5
+After quality control
+6 b SDI b 10
+After quality control
+11b SDI b 15
+After quality control
+16b SDI b 30
+N 22706 14,450 1913 4084 5906 2547
+Bias − 2.02 0.07 0.43 0.02 − 0.01 0.07
+Median difference − 0.63 0.16 0.42 0.14 0.05 0.25
+RMSE 3.85 0.95 1.35 0.97 0.87 0.67
+% error – 14.2% 15.3% 14.2% 14.4% 12.9%
+768 V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+accuracy of the retrieval is a function of the calibration of the
+hyperspectral imagery, the parameterization of the atmospheric cor-
+rection and the parameterization of the SAMBUCA model.
+These results suggest that the integrated physics based mapping
+approach adopted in this study performs well for retrieving water
+column depths in coastal waters in water depths ranging 4 – 13 m for
+the area and conditions studied, even with sub-optimal imagery.
+The ability of the physics-based quality control procedure in
+identifying only the pixels as having “good optical closure” and being
+optically shallow enabled a retrieval from suboptimal imagery with
+accuracy and precision comparable to other works carried out using
+optimal imagery (e.g. Adler-Golden et al., 2005; Klonowski et al., 2007;
+Lee et al., 2001; McIntyre et al., 2006 ).
+4. Conclusion
+In this study the inversion/optimization approach byLee et al. (1999,
+2001 , 1998)was enhanced to retrieve the concentrations of optically
+active constituents in the water column (chlorophyll-a, CDOM and NAP),
+to account for more than one substratum cover type and to estimate the
+contribution of the substratum to the remote sensing signal.
+The strength of applying the physics-based approach to airborne
+hyperspectral data was emphasised by its ability to produce outputs that
+can be used for quality control procedures. Despite inadequate quality of
+portions of the CASI-2 imagery due cloud cover in the area, the quality
+control procedure was able to identify pixels with a reliable retrieval of
+depth and to detect thin and thick clouds, as well as cloud shadows,
+which were all masked out from further analysis. This systematic quality
+control procedure facilitates the use of sub-optimal remote sensing
+imagery as it objectively assesses the data quality on a pixel-by-pixel
+basis. As optimal remote sensing acquisition conditions seldom occur,
+the adoption of this systematic quality control procedure in operational
+remote sensing surveys would enable a more reliable retrieval of the
+variables of interest.
+The bathymetry retrieved by applying the integrated physics based
+mapping approach to airborne hyperspectral data was compared to the
+bathymetry estimated using a vessel based acoustic bathymetry
+acquired during a high resolution multi-beam survey within 2 months
+of the image acquisition. The results show that the agreement between
+the two datasets varies as a function of the contribution of substratum to
+the remote sensing signal. As expected, there is greater agreement in
+shallower clear water than deeper or more turbid water. The objective
+and model-based quantitative identi ﬁcation and screening of the
+“optically deep waters ” and the “quasi-optically deep waters” led to
+improved precision in the depth retrieval from remote sensing imagery.
+With respect to the airborne hyperspectral datasets, the precision of the
+bathymetry is a function of the substratum detectabilty (SD), while the
+accuracy is a function of the calibration of the hyperspectral imagery, the
+parameterization of the atmospheric correction and the parameteriza-
+tion of the model adopted for the retrieval.
+The adopted approach represents a signi ﬁcant improvement over
+commonly used approaches for estimating depth from airborne and
+satellite multi-spectral images as it allows to overcome the degrada-
+tion of accuracy in the depth retrievals as the waters become deeper or
+more turbid. Further, application of this integrated physics based
+mapping approach will enable mapping and detection of changes in
+bathymetry or substratum cover type on airborne and satellite multi-
+and hyper-spectral image data.
+Acknowledgements
+This activity was funded by the Cooperative Research Centre
+Coastal Zone, Estuaries and Waterways Management and an ARC
+Linkage Grant to Professor Justin Marshall and Professor Stuart Phinn.
+We are grateful to Justy Sibawessy (Curtin University) for making
+the Acoustics dataset available for the analysis. Dave Ryan (Geoscience
+Australia) was helpful in extracting the acoustics dataset for our
+analysis. Additional ﬁnancial and data collection and processing
+support were provided by: Port of Brisbane Corporation, Ecological
+Health Monitoring Program, University of Queensland-Moreton Bay
+Research Station, Professor Justin Marshall, Alan Goldizen, Ian Leiper,
+Rob Van Ede, Paul Daniel, and Wesley Ledham. Comments by Brendan
+Brook, Nicole Pinnel, Roy Hughes and six anonymous referees
+improved earlier versions of this manuscript.
+References
+Adler-Golden, S. M., Acharya, P. K., Berk, A., Matthew, M. W., & Gorodetzky, D. (2005).
+Remote bathymetry of the littoral zone from AVIRIS, LASH, and QuickBird imagery.
+IEEE Transactions on Geoscience and Remote Sensing , 43,3 3 7−347.
+Adler-Golden, S. M., Bernstein, L. S., & Richtsmeier, S. C. (1998). Flaash, A Modtran4
+atmospheric correction package for hyperspectral data retrievals and simulations.
+Proceedings of AVIRIS Airborne Geoscience Workshop 1998 Pasadena, CA .
+Albert, A., & Gege, P. (2006). Inversion of irradiance and remote sensing re ﬂectance in
+shallow water between 400 and 800 nm for calculations of water and bottom
+properties. Applied Optics , 45, 2331−2343.
+Brando, V. E., & Dekker, A. G. (2003). Satellite hyperspectral remote sensing for estimating
+estuarine and coastal water quality. IEEE Transactions on Geoscience and Remote
+Sensing, 41,1 3 7 8−1387.
+Clark, R. K., Fay, T. H., & Walker, C. L. (1987). Bathymetry calculations with Landsat 4 TM
+imagery under a generalized ratio assumption. Applied Optics, 26, 4036 −4038.
+Datt, B., McVicar, T. R., Van Niel, T. G., Jupp, D. L. B., & Pearlman, J. S. (2003). Preprocessing
+EO-1 Hyperion hyperspectral data to support the application of agricultural indexes.
+IEEE Transactions on Geoscience and Remote Sensing, 41,1 2 4 6−1259.
+De Haan, J. F., & Kokke, J. M. M. (1996). Remote Sensing Algorithm Development Toolkit I:
+Operationalization of Atmospheric Correction Methods for Tidal and Inland Waters.
+BCRS 96-16. Delft.
+De Haan, J. F., Kokke, J. M. M., Hoogenboom, H. J., & Dekker, A. G. (1997). An integrated
+toolbox for processing and analysis of remote sensing data of inland and coastal
+waters-atmospheric correction. Fourth International Conference: Remote Sensing for
+Marine and Coastal Environments (pp. 1−215-21 1-222). ERIM.
+Dekker, A. G., Brando, V. E., Anstee, J. M., Pinnel, T., Kuster, H., Hoogenboom, H. J., et al. (2001).
+Chapter 1 1: Imaging spectrometry of water. In F. D. van der Meer, & S. M. de Jong (Eds.),
+Imaging Spectrometry: Basic Principles and Prospective Applications: Remote Sensing and
+Digital Image Processing(pp. 307−359). Boston: Kluwer Academic Publishers Dordrecht.
+Dennison, P. E., Halligan, K. Q., & Roberts, D. A. (2004). A comparison of error metrics and
+constraints for multiple endmember spectral mixture analysis and spectral angle
+mapper. Remote Sensing of Environment , 93, 359−367.
+Giardino, C., Bartoli, M., Candiani, G., Bresciani, M., & Pellegrini, L. (2007). Recent changes in
+macrophyte colonisation patterns: an imaging spectrometry-based evaluation of the
+southern Lake Garda (northern Italy).Journal of Applied Remote Sensing, 1,0 1 1 5 0 9 .
+Goodman, J., & Ustin, S. L. (2007). Classi ﬁcation of benthic composition in a coral reef
+environment using spectral unmixing. Journal of Applied Remote Sensing , 1,0 1 1 5 0 1 .
+Klonowski, W. M., Fearns, P. R. C. S., & Lynch, M. J. (2007). Retrieving key benthic cover
+types and bathymetry from hyperspectral imagery. Journal of Applied Remote
+Sensing, 1, 01 1505.
+Kruse, F. A., Lefkoff, A. B., Boardman, J. W., Heidebreche, K. B., Shapiro, A. B., Barloo, P. J.,
+et al. (1993). The spectral image processing system (SIPS) —
+Interactive visualization
+and analysis of imaging spectrometer data. Remote Sensing of Environment , 44,
+145−163.
+Lee, Z., Carder, K. L., Mobley, C. D., Steward, R. G., & Patch, J. F. (1999). Hyperspectral
+remote sensing for shallow waters: 2. Deriving bottom depths and water properties
+by optimization. Applied Optics, 38, 3831−3843.
+Lee, Z., Casey, B., Arnone, R., Weidemann, A., Parsons, R., Montes, M. J., et al. (2007).
+Water and bottom properties of a coastal environment derived from Hyperion data
+measured from the EO-1 spacecraft platform. Journal of Applied Remote Sensing , 1,
+01 1502.
+Lee, Z., Kendall, L. C., Chen, R. F., & Peacock, T. G. (2001). Properties of the water column
+and bottom derived from airborne visible imaging spectrometer (AVIRIS) data.
+Journal of Geophysical Research-Oceans , 106, 1 1639−116 51.
+Lee, Z. P., Carder, K. L., Mobley, C. D., Steward, R. G., & Patch, J. S. (1998). Hyperspectral
+remote sensing for shallow waters. I. A semianalytical model. Applied Optics , 37,
+6329−6338.
+Louchard, E. M., Reid, R. P ., Stephens, F. C., Davis, C. O., Leathers, R. A., & Downes, T. V. (2003).
+Optical remote sensing of benthic habitats and bathymetry in coastal environments at
+Lee Stocking Island, Bahamas: A comparative spectral classi ﬁcation approach. Lim-
+nology and Oceanography, 48,5 1 1−521.
+Lyzenga, D. R. (1981). Remote sensing of bottom re ﬂectance and water attenuation
+parameters in shallow water using aircraft and Landsat data. International Journal of
+Remote Sensing, 2,7 1−82.
+Maritorena, S., Morel, A., & Gentili, B. (1994). Diffuse reﬂectance of oceanic shallow waters:
+inﬂuence of water depth and bottom albedo. Limnology and Oceanography , 39,
+1689−1 703.
+McIntyre, M. L., Naar, D. F., Carder, K. L., Donahue, B. T., & Mallinson, D. J. (2006). Coastal
+bathymetry from hyperspectral remote sensing data: comparisons with high
+resolution multibeam bathymetry.Marine Geophysical Researches, 27,1 2 8−136.
+M o b l e y ,C .D . ,S u n d m a n ,L . ,D a v i s ,C .O . ,B o w l e s ,J .H . ,D o w n e s ,T .V . ,L e a t h e r s ,R .A . ,e ta l .( 2 0 0 5 ) .
+Interpretation of hyperspectral remote-sensing imagery by spectrum matching and
+look-up tables.Applied Optics, 44,3 5 7 6−3592.
+769V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
+
+Morel, A. (1974). Optical properties of pure water and pure sea water. In N. G. Jerlov, & E. S.
+Nielsen (Eds.), Optical Aspects of Oceanography(pp. 1−24). London: Academic Press.
+Oubelkheir, K., Clementson, L., Webster, I., Ford, P., Dekker, A. G., Radke, L., et al. (2006).
+Using inherent optical properties to investigate biogeochemical dynamics in a
+tropical macrotidal coastal system. Journal of Geophysical Research (C Oceans) , 111,
+doi:10.1029/2005JC0031 13.
+Philpot, W. D. (1989). Bathymetric mapping with passive multispectral imagery. Applied
+Optics, 28, 1569−1578.
+Phinn, S. R., Dekker, A. G., Brando, V. E., & Roelfsema, C. M. (2005). Mapping water quality and
+substrate cover in optically complex coastal and reef waters: An integrated approach.
+Marine Pollution Bulletin, 51, 459−469.
+Phinn, S., Roelfsema, C., Dekker, A., Brando, V., & Anstee, J. (2008). Mapping seagrass
+species, cover and biomass in shallow waters: An assessment of satellite multi-
+spectral and airborne hyper-spectral imaging systems in Moreton Bay (Australia).
+Remote Sensing of Environment , 112,3 4 1 3−3425.
+Phinn, S., Roelfsma, C., Brando, V. E., Dekker, A., & Anstee, J. M. (2006). Remote sensing for
+coastal ecosystem indicators assessment & monitoring (SR). Coastal CRC Technical
+Report, vol. 76 . (pp. 1 1 7)Brisbane: CRC for Coastal Zone, Estuary and Waterway
+Management.
+Pope, R. M., & Fry, E. S. (1997). Absorption spectrum (380– 700 nm) of pure water. II. Integrating
+cavity measurements.Applied Optics, 36,8 7 1 0−8723.
+Qin, Y., Dekker, A. G., Brando, V. E., & Blondeau-Patissier, D. (2007). Validity of SeaDAS water
+constituents retrieval algorithms in Australian tropical coastal waters. Geophysical
+Research Letters, 34.
+Roelfsema, C. M., Phinn, S. R., Dennison, W. C., Dekker, A. G., & Brando, V. E. (2006).
+Monitoring toxic cyanobacteriaLyngbya majuscula(Gomont) in Moreton Bay, Australia
+by integrating satellite image data and ﬁeld mapping. Harmful Algae, 5,4 5−56.
+Sandidge, J. C., & Holyer, R. J. (1998). Coastal bathymetry from hyperspectral observations of
+water radiance.Remote Sensing of Environment, 65,3 4 1−352.
+Siwabessy, P. J. W. (2005). Multibeam and single beam backscatter data analysis, and
+video imagery from Moreton Bay and Keppel Bay. Coastal CRC Milestone Report
+CA6.01 Brisbane: CRC for Coastal Zone, Estuary and Waterway Management.
+Siwabessy, P. J. W., Parnum, I., Gavrilov, A., & McCauley, R. D. (2006). Overview of coastal
+water habitat mapping research for the Coastal CRC. Technical Report 86 Brisbane:
+Cooperative Research Centre for Coastal Zone, Estuary and Waterway Management.
+Stumpf, R. P., Holderied, K., & Sinclair, M. (2003). Determination of water depth with
+high-resolution satellite imagery over variable bottom types. Limnology and
+Oceanography,
+48,5 4 7−556.
+Wettle, M., & Brando, V. E. (2006). SAMBUCA— Semi-analytical model for bathymetry, un-
+mixing and concentration assessment. CSIRO Land and Water Science Report 22/06
+Canberra: CSIRO Land and Water.
+Wettle, M., Brando, V. E., & Dekker, A. G. (2004). A methodology for retrieval of environmental
+noise equivalent spectra applied to four Hyperion scenes of the same tropical coral reef.
+Remote Sensing of Environment, 93,1 8 8−197.
+Wettle, M., Dekker, A., & Brando, V. E. (2005). Monitoring Bleaching of Tropical Coral Reefs
+From Space. A Feasibility Study Using a Physics-Based Remote Sensing Approach.:C S I R O
+Wealth from Oceans Flagship Program.
+770 V.E. Brando et al. / Remote Sensing of Environment 1 13 (2009) 755 –770
