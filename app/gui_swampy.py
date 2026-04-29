@@ -1343,9 +1343,13 @@ def gui():
     output_folder_var = StringVar(value=os.path.join(cwd, "Output"))
     crop_selection = None
     deep_water_selection = None
+    shallow_substrate_prior_selection = None
     crop_summary_var = StringVar(value="Full scene")
     deep_water_summary_var = StringVar(value="No deep-water polygons selected")
     deep_water_use_sd_var = BooleanVar(value=False)
+    shallow_substrate_prior_summary_var = StringVar(value="Select at least one target spectrum to enable shallow-water priors")
+    shallow_substrate_prior_use_sd_var = BooleanVar(value=False)
+    shallow_substrate_prior_target_var = StringVar(value="")
     io_change_state = {
         "modified_since_load": False,
         "suspend_tracking": False,
@@ -1483,6 +1487,7 @@ def gui():
                 sub3_min_entry.configure(state="normal")
                 sub3_max_entry.configure(state="normal")
             siop_summary_var.set(f"{actual_count} target spectra selected: {', '.join(summary_names)}.")
+        _refresh_shallow_substrate_prior_target_options()
         update_run_button_state()
 
     def update_sensor_ui():
@@ -1680,6 +1685,35 @@ def gui():
         normalized["bbox"] = None
         return normalized
 
+    def _available_shallow_substrate_prior_targets():
+        try:
+            return list(build_current_siop()["actual_selected_targets"])
+        except Exception:
+            return [str(name).strip() for name in selected_target_names if str(name).strip()]
+
+    def _normalise_shallow_substrate_prior_selection(selection):
+        if not selection:
+            return None
+        normalized = dict(selection)
+        target_name = str(normalized.get("target_name") or "").strip()
+        polygons = normalized.get("polygons") or []
+        valid_polygons = []
+        for geometry in polygons:
+            if not isinstance(geometry, dict):
+                continue
+            geom_type = str(geometry.get("type") or "")
+            coordinates = geometry.get("coordinates")
+            if geom_type not in {"Polygon", "MultiPolygon"} or not coordinates:
+                continue
+            valid_polygons.append(geometry)
+        if not target_name or not valid_polygons:
+            return None
+        normalized["target_name"] = target_name
+        normalized["polygons"] = valid_polygons
+        normalized["mask_path"] = ""
+        normalized["bbox"] = None
+        return normalized
+
     def _format_crop_summary(selection):
         if not selection:
             return "Full scene"
@@ -1712,6 +1746,25 @@ def gui():
             "CHL, CDOM and NAP parameter bounds below are disabled and inferred from those pixels."
         )
 
+    def _format_shallow_substrate_prior_summary(selection):
+        available_targets = _available_shallow_substrate_prior_targets()
+        if not available_targets:
+            return "Select at least one target spectrum to enable shallow-water priors"
+        if not selection:
+            target_name = str(shallow_substrate_prior_target_var.get() or "").strip()
+            if target_name:
+                return f"No shallow-water prior polygons selected for {target_name}"
+            return "No shallow-water prior polygons selected"
+        polygon_count = len(selection.get("polygons") or [])
+        target_name = str(selection.get("target_name") or shallow_substrate_prior_target_var.get() or "").strip()
+        if polygon_count <= 0 or not target_name:
+            return "No shallow-water prior polygons selected"
+        mode_text = "mean ± sd bounds" if shallow_substrate_prior_use_sd_var.get() else "fixed values"
+        return (
+            f"{polygon_count} polygon(s) selected for {target_name} ({mode_text}). "
+            f"Pixels are assumed 100% {target_name}; CHL, CDOM and NAP parameter bounds below are disabled and inferred from those pixels."
+        )
+
     def _set_crop_selection(selection):
         nonlocal crop_selection
         crop_selection = _normalise_crop_selection(selection)
@@ -1722,13 +1775,30 @@ def gui():
         nonlocal deep_water_selection
         deep_water_selection = _normalise_deep_water_selection(selection)
         deep_water_summary_var.set(_format_deep_water_summary(deep_water_selection))
-        _update_deep_water_parameter_controls()
+        _update_water_prior_parameter_controls()
+        _update_prior_mutual_exclusivity()
+        update_run_button_state()
+
+    def _set_shallow_substrate_prior_selection(selection):
+        nonlocal shallow_substrate_prior_selection
+        normalized = _normalise_shallow_substrate_prior_selection(selection)
+        shallow_substrate_prior_selection = normalized
+        if normalized:
+            shallow_substrate_prior_target_var.set(str(normalized.get("target_name") or "").strip())
+        shallow_substrate_prior_summary_var.set(_format_shallow_substrate_prior_summary(shallow_substrate_prior_selection))
+        _update_water_prior_parameter_controls()
+        _update_shallow_substrate_prior_controls()
+        _update_prior_mutual_exclusivity()
+        update_run_button_state()
 
     def clear_crop_selection():
         _set_crop_selection(None)
 
     def clear_deep_water_selection():
         _set_deep_water_selection(None)
+
+    def clear_shallow_substrate_prior_selection():
+        _set_shallow_substrate_prior_selection(None)
 
     crop_button = None
 
@@ -1739,7 +1809,96 @@ def gui():
 
     def _refresh_deep_water_summary(*_args):
         deep_water_summary_var.set(_format_deep_water_summary(deep_water_selection))
-        _update_deep_water_parameter_controls()
+        _update_water_prior_parameter_controls()
+        update_run_button_state()
+
+    def _refresh_shallow_substrate_prior_summary(*_args):
+        if shallow_substrate_prior_selection is not None:
+            current_target = str(shallow_substrate_prior_target_var.get() or "").strip()
+            if current_target:
+                shallow_substrate_prior_selection["target_name"] = current_target
+        shallow_substrate_prior_summary_var.set(
+            _format_shallow_substrate_prior_summary(shallow_substrate_prior_selection)
+        )
+        _update_water_prior_parameter_controls()
+        update_run_button_state()
+
+    shallow_substrate_prior_target_combo = None
+    shallow_substrate_prior_select_button = None
+    shallow_substrate_prior_clear_button = None
+    shallow_substrate_prior_sd_checkbutton = None
+    deep_water_select_button = None
+    deep_water_clear_button = None
+    deep_water_sd_checkbutton = None
+
+    def _refresh_shallow_substrate_prior_target_options():
+        available_targets = _available_shallow_substrate_prior_targets()
+        current_target = str(shallow_substrate_prior_target_var.get() or "").strip()
+        selection_target = ""
+        if shallow_substrate_prior_selection:
+            selection_target = str(shallow_substrate_prior_selection.get("target_name") or "").strip()
+
+        if shallow_substrate_prior_selection and selection_target and selection_target not in available_targets:
+            clear_shallow_substrate_prior_selection()
+            current_target = ""
+            selection_target = ""
+
+        if not current_target:
+            if selection_target and selection_target in available_targets:
+                shallow_substrate_prior_target_var.set(selection_target)
+                current_target = selection_target
+            elif available_targets:
+                shallow_substrate_prior_target_var.set(available_targets[0])
+                current_target = available_targets[0]
+
+        if current_target and current_target not in available_targets:
+            if available_targets:
+                shallow_substrate_prior_target_var.set(available_targets[0])
+            else:
+                shallow_substrate_prior_target_var.set("")
+
+        if shallow_substrate_prior_target_combo is not None:
+            shallow_substrate_prior_target_combo.configure(values=available_targets)
+        _refresh_shallow_substrate_prior_summary()
+        _update_shallow_substrate_prior_controls()
+
+    def _update_shallow_substrate_prior_controls():
+        available_targets = _available_shallow_substrate_prior_targets()
+        shallow_available = bool(available_targets)
+        if shallow_substrate_prior_target_combo is not None:
+            _set_widget_enabled(shallow_substrate_prior_target_combo, shallow_available)
+        if shallow_substrate_prior_select_button is not None:
+            _set_widget_enabled(shallow_substrate_prior_select_button, shallow_available)
+        if shallow_substrate_prior_clear_button is not None:
+            _set_widget_enabled(
+                shallow_substrate_prior_clear_button,
+                shallow_available or bool(shallow_substrate_prior_selection),
+            )
+        if shallow_substrate_prior_sd_checkbutton is not None:
+            _set_widget_enabled(shallow_substrate_prior_sd_checkbutton, shallow_available)
+
+    def _update_prior_mutual_exclusivity():
+        """Disable one prior type when the other is active."""
+        deep_water_active = bool(deep_water_selection and (deep_water_selection.get("polygons") or []))
+        shallow_prior_active = bool(shallow_substrate_prior_selection and (shallow_substrate_prior_selection.get("polygons") or []))
+        
+        # Disable deep water controls when shallow prior is active
+        if deep_water_select_button is not None:
+            _set_widget_enabled(deep_water_select_button, not shallow_prior_active)
+        if deep_water_clear_button is not None:
+            _set_widget_enabled(deep_water_clear_button, deep_water_active and not shallow_prior_active)
+        if deep_water_sd_checkbutton is not None:
+            _set_widget_enabled(deep_water_sd_checkbutton, not shallow_prior_active)
+        
+        # Disable shallow prior controls when deep water is active
+        if shallow_substrate_prior_select_button is not None:
+            _set_widget_enabled(shallow_substrate_prior_select_button, not deep_water_active)
+        if shallow_substrate_prior_clear_button is not None:
+            _set_widget_enabled(shallow_substrate_prior_clear_button, shallow_prior_active and not deep_water_active)
+        if shallow_substrate_prior_target_combo is not None:
+            _set_widget_enabled(shallow_substrate_prior_target_combo, not deep_water_active)
+        if shallow_substrate_prior_sd_checkbutton is not None:
+            _set_widget_enabled(shallow_substrate_prior_sd_checkbutton, not deep_water_active)
 
     def _run_with_loading_dialog(title_text, message_text, worker_func):
         result_holder = {"done": False}
@@ -1937,6 +2096,68 @@ def gui():
             },
         }
 
+    def _prepare_shallow_substrate_prior_window_request(first_image):
+        preview_data, preview_info = _load_preview_band_from_netcdf(
+            first_image,
+            sensor_state["sensor_name"],
+            prefer_rgb_preview=True,
+        )
+
+        lat_grid = preview_info.get("lat_grid")
+        lon_grid = preview_info.get("lon_grid")
+        if lat_grid is None or lon_grid is None:
+            raise RuntimeError("The shallow-water prior selector requires latitude and longitude coordinates in the input image.")
+
+        finite_coord_mask = np.isfinite(lat_grid) & np.isfinite(lon_grid)
+        if not np.any(finite_coord_mask):
+            raise RuntimeError("The shallow-water prior selector requires valid latitude and longitude coordinates.")
+
+        lon_min = float(np.nanmin(lon_grid[finite_coord_mask]))
+        lon_max = float(np.nanmax(lon_grid[finite_coord_mask]))
+        lat_min = float(np.nanmin(lat_grid[finite_coord_mask]))
+        lat_max = float(np.nanmax(lat_grid[finite_coord_mask]))
+
+        existing_selection = _normalise_shallow_substrate_prior_selection(shallow_substrate_prior_selection) or {
+            "target_name": str(shallow_substrate_prior_target_var.get() or "").strip(),
+            "polygons": [],
+        }
+        existing_source_path = str(existing_selection.get("source_path") or "").strip()
+        if existing_source_path and not _paths_equivalent(existing_source_path, first_image):
+            existing_selection = {
+                "target_name": str(shallow_substrate_prior_target_var.get() or "").strip(),
+                "polygons": [],
+            }
+
+        target_name = str(shallow_substrate_prior_target_var.get() or existing_selection.get("target_name") or "").strip()
+        if not target_name:
+            raise RuntimeError("Select the target substrate before defining shallow-water prior polygons.")
+
+        return {
+            "mode": "polygons",
+            "title": "Shallow-water substrate priors",
+            "subtitle": (
+                f"{preview_info.get('preview_description', preview_info['source_name'])}. "
+                f"Draw one or several polygons over pixels assumed to be 100% {target_name}. "
+                "These pixels will be used to estimate CHL, CDOM, NAP and depth before propagating the retained IOPs to the full scene."
+            ),
+            "image_name": os.path.basename(first_image),
+            "source_name": preview_info["source_name"],
+            "sensor_name": sensor_state["sensor_name"],
+            "preview_description": preview_info.get("preview_description", preview_info["source_name"]),
+            "preview_data": preview_data,
+            "preview_max_dim": 1000,
+            "lon_min": lon_min,
+            "lon_max": lon_max,
+            "lat_min": lat_min,
+            "lat_max": lat_max,
+            "allow_mask_import": False,
+            "allow_rectangle": False,
+            "allow_polygon": True,
+            "selection": {
+                "polygons": list(existing_selection.get("polygons") or []),
+            },
+        }
+
     def open_crop_popup():
         current_files = _current_input_file_list()
         if not current_files:
@@ -2000,6 +2221,55 @@ def gui():
 
         selection["source_path"] = first_image
         _set_deep_water_selection(selection)
+
+    def open_shallow_substrate_prior_popup():
+        available_targets = _available_shallow_substrate_prior_targets()
+        if not available_targets:
+            messagebox.showinfo(
+                "No target substrate",
+                "Select at least one target spectrum before defining shallow-water substrate priors.",
+                parent=root,
+            )
+            return
+
+        if not str(shallow_substrate_prior_target_var.get() or "").strip():
+            shallow_substrate_prior_target_var.set(available_targets[0])
+
+        current_files = _current_input_file_list()
+        if not current_files:
+            messagebox.showinfo(
+                "No input image",
+                "Select at least one input image before defining shallow-water substrate priors.",
+                parent=root,
+            )
+            return
+
+        first_image = current_files[0]
+        if not os.path.isfile(first_image):
+            messagebox.showerror("Missing input image", f"Input image not found:\n{first_image}", parent=root)
+            return
+
+        try:
+            request_payload = _run_with_loading_dialog(
+                "Loading shallow-water prior selector",
+                "Preparing the preview and polygon interface...",
+                lambda: _prepare_shallow_substrate_prior_window_request(first_image),
+            )
+            selection = _open_leaflet_crop_window(cwd, request_payload)
+        except Exception as exc:
+            messagebox.showerror(
+                "Shallow-water prior selector unavailable",
+                f"Unable to open the shallow-water prior selection window.\n\n{exc}",
+                parent=root,
+            )
+            return
+
+        if selection is None:
+            return
+
+        selection["source_path"] = first_image
+        selection["target_name"] = str(shallow_substrate_prior_target_var.get() or "").strip()
+        _set_shallow_substrate_prior_selection(selection)
 
     def _get_sensor_mapping_validation_error():
         image_band_info, image_band_error = _get_current_image_band_info()
@@ -2068,6 +2338,15 @@ def gui():
             build_current_sensor()
         except Exception as exc:
             return f"Invalid sensor setup: {exc}"
+
+        deep_water_active = bool(deep_water_selection and (deep_water_selection.get("polygons") or []))
+        shallow_prior_active = bool(
+            shallow_substrate_prior_selection and (shallow_substrate_prior_selection.get("polygons") or [])
+        )
+        if deep_water_active and shallow_prior_active:
+            return "Choose either deep-water priors or shallow-water substrate priors, not both."
+        if shallow_prior_active and not str(shallow_substrate_prior_target_var.get() or "").strip():
+            return "Select the target substrate for the shallow-water prior polygons."
 
         sensor_mapping_error = _get_sensor_mapping_validation_error()
         if sensor_mapping_error:
@@ -4347,12 +4626,15 @@ def gui():
     for tab in (input_tab, params_tab):
         tab.columnconfigure(0, weight=1)
 
+    params_tab.columnconfigure(1, weight=1)
+
     input_tab.rowconfigure(0, weight=0)
     input_tab.rowconfigure(1, weight=1)
     input_tab.rowconfigure(2, weight=0)
     params_tab.rowconfigure(0, weight=0)
     params_tab.rowconfigure(1, weight=0)
     params_tab.rowconfigure(2, weight=0)
+    params_tab.rowconfigure(3, weight=0)
 
     files_frame = ttk.Labelframe(input_tab, text="Files")
     files_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
@@ -4464,9 +4746,9 @@ def gui():
     update_split_controls()
     update_relaxed_controls()
 
-    # ---- Input Bathymetry section (params_tab row 2) ----
+    # ---- Input Bathymetry section (params_tab row 0, column 1) ----
     bathy_frame = ttk.Labelframe(params_tab, text="Input Bathymetry")
-    bathy_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
+    bathy_frame.grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
     bathy_frame.columnconfigure(1, weight=1)
 
     # Row 0: Estimate (default)
@@ -4627,13 +4909,16 @@ def gui():
     deep_water_frame.columnconfigure(1, weight=0)
     deep_water_frame.columnconfigure(2, weight=1)
 
-    ttk.Button(deep_water_frame, text="Select deep-water polygons", command=open_deep_water_popup).grid(row=0, column=0, sticky="w")
-    ttk.Button(deep_water_frame, text="Clear", command=clear_deep_water_selection).grid(row=0, column=1, sticky="w", padx=(6, 0))
-    ttk.Checkbutton(
+    deep_water_select_button = ttk.Button(deep_water_frame, text="Select deep-water polygons", command=open_deep_water_popup)
+    deep_water_select_button.grid(row=0, column=0, sticky="w")
+    deep_water_clear_button = ttk.Button(deep_water_frame, text="Clear", command=clear_deep_water_selection)
+    deep_water_clear_button.grid(row=0, column=1, sticky="w", padx=(6, 0))
+    deep_water_sd_checkbutton = ttk.Checkbutton(
         deep_water_frame,
         text="Use mean ± sd as bounds instead of fixed values",
         variable=deep_water_use_sd_var,
-    ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    )
+    deep_water_sd_checkbutton.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
     ttk.Label(
         deep_water_frame,
         textvariable=deep_water_summary_var,
@@ -4641,7 +4926,44 @@ def gui():
         justify="left",
     ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
-    deep_water_bound_entries = (
+    shallow_prior_frame = ttk.LabelFrame(params_tab, text="Shallow-water substrate priors")
+    shallow_prior_frame.grid(row=1, column=1, sticky="nsew", padx=4, pady=(0, 4))
+    shallow_prior_frame.columnconfigure(2, weight=1)
+
+    ttk.Label(shallow_prior_frame, text="Target substrate").grid(row=0, column=0, sticky="w")
+    shallow_substrate_prior_target_combo = ttk.Combobox(
+        shallow_prior_frame,
+        state="readonly",
+        textvariable=shallow_substrate_prior_target_var,
+        values=_available_shallow_substrate_prior_targets(),
+    )
+    shallow_substrate_prior_target_combo.grid(row=0, column=1, sticky="w", padx=(8, 8))
+    shallow_substrate_prior_select_button = ttk.Button(
+        shallow_prior_frame,
+        text="Select polygons",
+        command=open_shallow_substrate_prior_popup,
+    )
+    shallow_substrate_prior_select_button.grid(row=0, column=2, sticky="w")
+    shallow_substrate_prior_clear_button = ttk.Button(
+        shallow_prior_frame,
+        text="Clear",
+        command=clear_shallow_substrate_prior_selection,
+    )
+    shallow_substrate_prior_clear_button.grid(row=0, column=3, sticky="w", padx=(6, 0))
+    shallow_substrate_prior_sd_checkbutton = ttk.Checkbutton(
+        shallow_prior_frame,
+        text="Use mean ± sd as bounds instead of fixed values",
+        variable=shallow_substrate_prior_use_sd_var,
+    )
+    shallow_substrate_prior_sd_checkbutton.grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
+    ttk.Label(
+        shallow_prior_frame,
+        textvariable=shallow_substrate_prior_summary_var,
+        wraplength=620,
+        justify="left",
+    ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+
+    water_prior_bound_entries = (
         chl_min_entry,
         chl_max_entry,
         cdom_min_entry,
@@ -4650,10 +4972,14 @@ def gui():
         nap_max_entry,
     )
 
-    def _update_deep_water_parameter_controls():
+    def _update_water_prior_parameter_controls():
         deep_water_active = bool(deep_water_selection and (deep_water_selection.get("polygons") or []))
-        for widget in deep_water_bound_entries:
-            _set_widget_enabled(widget, not deep_water_active)
+        shallow_prior_active = bool(
+            shallow_substrate_prior_selection and (shallow_substrate_prior_selection.get("polygons") or [])
+        )
+        bounds_enabled = not (deep_water_active or shallow_prior_active)
+        for widget in water_prior_bound_entries:
+            _set_widget_enabled(widget, bounds_enabled)
 
     for tracked_var in (
         input_image_var,
@@ -4679,6 +5005,8 @@ def gui():
     ):
         tracked_var.trace_add("write", update_run_button_state)
     deep_water_use_sd_var.trace_add("write", _refresh_deep_water_summary)
+    shallow_substrate_prior_use_sd_var.trace_add("write", _refresh_shallow_substrate_prior_summary)
+    shallow_substrate_prior_target_var.trace_add("write", _refresh_shallow_substrate_prior_summary)
     input_image_var.trace_add("write", _track_input_field_change)
     output_folder_var.trace_add("write", _track_output_field_change)
     input_image_var.trace_add("write", _sync_input_files_with_entry)
@@ -4704,7 +5032,9 @@ def gui():
 
     bathy_mode.trace_add("write", update_depth_state)
     update_depth_state()
-    _update_deep_water_parameter_controls()
+    _update_water_prior_parameter_controls()
+    _update_prior_mutual_exclusivity()
+    _refresh_shallow_substrate_prior_target_options()
 
     def load_previous_run_settings():
         nonlocal template_config, spectral_library, compiled_siop, compiled_sensor, input_files
@@ -4918,6 +5248,41 @@ def gui():
                     clear_deep_water_selection()
             else:
                 clear_deep_water_selection()
+
+            loaded_shallow_prior_enabled = _parse_bool_text(
+                _xml_find_text(xml_root, "shallow_substrate_prior_enabled"),
+                False,
+            )
+            shallow_substrate_prior_use_sd_var.set(
+                _parse_bool_text(_xml_find_text(xml_root, "shallow_substrate_prior_use_sd_bounds"), False)
+            )
+            loaded_shallow_target_name = _xml_find_text(xml_root, "shallow_substrate_prior_target_name", "") or ""
+            matched_shallow_target = _match_clean_name(
+                loaded_shallow_target_name,
+                _available_shallow_substrate_prior_targets(),
+            )
+            shallow_substrate_prior_target_var.set(matched_shallow_target or loaded_shallow_target_name)
+            if loaded_shallow_prior_enabled:
+                try:
+                    shallow_prior_polygons_json = _xml_find_text(
+                        xml_root,
+                        "shallow_substrate_prior_polygons_json",
+                        "",
+                    ) or "[]"
+                    loaded_polygons = json.loads(shallow_prior_polygons_json)
+                    _set_shallow_substrate_prior_selection({
+                        "target_name": matched_shallow_target or loaded_shallow_target_name,
+                        "polygons": loaded_polygons,
+                        "source_path": loaded_images[0] if loaded_images else _xml_find_text(
+                            xml_root,
+                            "shallow_substrate_prior_source_image",
+                            "",
+                        ),
+                    })
+                except Exception:
+                    clear_shallow_substrate_prior_selection()
+            else:
+                clear_shallow_substrate_prior_selection()
         finally:
             io_change_state["suspend_tracking"] = False
             io_change_state["modified_since_load"] = False
@@ -5123,6 +5488,8 @@ def gui():
             "crop_selection": copy.deepcopy(crop_selection),
             "deep_water_selection": copy.deepcopy(deep_water_selection),
             "deep_water_use_sd_bounds": bool(deep_water_use_sd_var.get()),
+            "shallow_substrate_prior_selection": copy.deepcopy(shallow_substrate_prior_selection),
+            "shallow_substrate_prior_use_sd_bounds": bool(shallow_substrate_prior_use_sd_var.get()),
             "use_bathy": bathy_mode.get() == "input",
             "bathy_path": current_bathy_path,
             "bathy_reference": bathy_reference,
@@ -5174,6 +5541,8 @@ def gui():
             "crop_selection",
             "deep_water_selection",
             "deep_water_use_sd_bounds",
+            "shallow_substrate_prior_selection",
+            "shallow_substrate_prior_use_sd_bounds",
             "use_bathy",
             "bathy_path",
             "bathy_reference",
@@ -5298,6 +5667,14 @@ def gui():
                     add("Input", "Crop point buffer (m)", crop.get("mask_buffer_m", ""))
             add("Input", "Deep-water priors", bool(version.get("deep_water_selection")))
             add("Input", "Deep-water mean +/- sd bounds", version.get("deep_water_use_sd_bounds", False))
+            shallow_prior = version.get("shallow_substrate_prior_selection") or {}
+            add("Input", "Shallow-water substrate priors", bool(shallow_prior))
+            add("Input", "Shallow-water target substrate", shallow_prior.get("target_name", ""))
+            add(
+                "Input",
+                "Shallow-water mean +/- sd bounds",
+                version.get("shallow_substrate_prior_use_sd_bounds", False),
+            )
 
             add("Water & bottom", "Selected targets", siop_payload.get("selected_targets", []))
             add("Water & bottom", "Substrate names", siop_payload.get("xml_substrate_names", []))
@@ -5598,6 +5975,7 @@ def gui():
     def _build_input_dict_for_version(version, file_iop_path, file_sensor_path, initial_ofile, version_index):
         version_crop = version.get("crop_selection")
         version_deep_water = version.get("deep_water_selection")
+        version_shallow_prior = version.get("shallow_substrate_prior_selection")
         version_anomaly_search = version.get("anomaly_search_settings", {})
         sensor_log_payload = version.get("sensor_log_payload", {})
         payload = {
@@ -5620,6 +5998,17 @@ def gui():
             "deep_water_use_sd_bounds": bool(version.get("deep_water_use_sd_bounds", False)),
             "deep_water_polygons_json": json.dumps((version_deep_water or {}).get("polygons") or []),
             "deep_water_source_image": str((version_deep_water or {}).get("source_path", "")) if version_deep_water else "",
+            "shallow_substrate_prior_enabled": bool(version_shallow_prior),
+            "shallow_substrate_prior_target_name": str((version_shallow_prior or {}).get("target_name", "")),
+            "shallow_substrate_prior_use_sd_bounds": bool(
+                version.get("shallow_substrate_prior_use_sd_bounds", False)
+            ),
+            "shallow_substrate_prior_polygons_json": json.dumps(
+                (version_shallow_prior or {}).get("polygons") or []
+            ),
+            "shallow_substrate_prior_source_image": str(
+                (version_shallow_prior or {}).get("source_path", "")
+            ) if version_shallow_prior else "",
             "SIOPS": file_iop_path,
             "sensor_filter": file_sensor_path,
             "nedr_mode": "fixed",

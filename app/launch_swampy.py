@@ -22,6 +22,7 @@ import glob
 import copy
 import csv
 import json
+import math
 import os, sys
 import re
 import shutil
@@ -239,6 +240,8 @@ _SCENE_NEDR_TARGET_FRACTION = 0.02
 _SCENE_NEDR_MIN_PIXELS = 256
 _SCENE_NEDR_MAX_PIXELS = 4096
 _SCENE_NEDR_SIGMA_MULTIPLIER = 2.0
+_PRIOR_PIXEL_SAMPLE_LIMIT = 1000
+_SHALLOW_SUBSTRATE_PRIOR_MIN_EXP_BOTTOM = 0.05
 DEFAULT_ANOMALY_SEARCH_SETTINGS = {
     'enabled': False,
     'export_local_moran_raster': False,
@@ -380,6 +383,39 @@ def _parse_deep_water_selection(config_root):
         'polygons': valid_polygons,
         'use_sd_bounds': _coerce_bool(config_root.get('deep_water_use_sd_bounds', False), False),
         'source_image': str(config_root.get('deep_water_source_image', '') or ''),
+    }
+
+
+def _parse_shallow_substrate_prior_selection(config_root):
+    """Return a validated shallow-water substrate prior selection from XML/log settings, or None."""
+    if not config_root or not _coerce_bool(config_root.get('shallow_substrate_prior_enabled', False), False):
+        return None
+    target_name = str(config_root.get('shallow_substrate_prior_target_name', '') or '').strip()
+    if not target_name:
+        return None
+    polygons_raw = config_root.get('shallow_substrate_prior_polygons_json', '[]')
+    try:
+        if isinstance(polygons_raw, (list, tuple)):
+            polygons = list(polygons_raw)
+        else:
+            polygons = json.loads(str(polygons_raw))
+    except Exception:
+        return None
+    valid_polygons = []
+    for geometry in polygons:
+        if not isinstance(geometry, dict):
+            continue
+        geom_type = str(geometry.get('type') or '')
+        coordinates = geometry.get('coordinates')
+        if geom_type in ('Polygon', 'MultiPolygon') and coordinates:
+            valid_polygons.append(geometry)
+    if not valid_polygons:
+        return None
+    return {
+        'target_name': target_name,
+        'polygons': valid_polygons,
+        'use_sd_bounds': _coerce_bool(config_root.get('shallow_substrate_prior_use_sd_bounds', False), False),
+        'source_image': str(config_root.get('shallow_substrate_prior_source_image', '') or ''),
     }
 
 
@@ -751,7 +787,7 @@ def _estimate_deep_water_pixel(objective, observed_rrs, chl_bounds, cdom_bounds,
     }
 
 
-def _apply_deep_water_priors(siop, estimates, use_sd_bounds):
+def _apply_iop_priors(siop, estimates, use_sd_bounds):
     if not estimates:
         return None
     chl_vals = np.array([item['chl'] for item in estimates], dtype=float)
@@ -794,10 +830,175 @@ def _apply_deep_water_priors(siop, estimates, use_sd_bounds):
     return stats
 
 
+def _apply_deep_water_priors(siop, estimates, use_sd_bounds):
+    return _apply_iop_priors(siop, estimates, use_sd_bounds)
+
+
+def _normalise_label_key(value):
+    text = str(value or '').replace('\\', '/').split('/')[-1]
+    if ':' in text:
+        text = text.split(':')[-1]
+    return re.sub(r'\s+', ' ', text).strip().lower()
+
+
+def _resolve_shallow_substrate_target_index(selection, substrate_names):
+    target_key = _normalise_label_key((selection or {}).get('target_name'))
+    if not target_key:
+        return None, ''
+    for index, name in enumerate(list(substrate_names or [])[:3]):
+        if _normalise_label_key(name) == target_key:
+            return index, str(name)
+    return None, ''
+
+
+def _run_forward_model_for_objective_parameters(objective, parameters):
+    fixed = objective._fixed_parameters
+    return sbc.forward_model(
+        chl=float(parameters[0]),
+        cdom=float(parameters[1]),
+        nap=float(parameters[2]),
+        depth=float(parameters[3]),
+        sub1_frac=float(parameters[4]),
+        sub2_frac=float(parameters[5]),
+        sub3_frac=float(parameters[6]),
+        substrate1=fixed.substrates[0],
+        substrate2=fixed.substrates[1],
+        substrate3=fixed.substrates[2],
+        wavelengths=np.asarray(fixed.wavelengths, dtype=float),
+        a_water=np.asarray(fixed.a_water, dtype=float),
+        a_ph_star=np.asarray(fixed.a_ph_star, dtype=float),
+        num_bands=int(fixed.num_bands),
+        a_cdom_slope=float(fixed.a_cdom_slope),
+        a_nap_slope=float(fixed.a_nap_slope),
+        bb_ph_slope=float(fixed.bb_ph_slope),
+        bb_nap_slope=float(fixed.bb_nap_slope) if fixed.bb_nap_slope is not None else None,
+        lambda0cdom=float(fixed.lambda0cdom),
+        lambda0nap=float(fixed.lambda0nap),
+        lambda0x=float(fixed.lambda0x),
+        x_ph_lambda0x=float(fixed.x_ph_lambda0x),
+        x_nap_lambda0x=float(fixed.x_nap_lambda0x),
+        a_cdom_lambda0cdom=float(fixed.a_cdom_lambda0cdom),
+        a_nap_lambda0nap=float(fixed.a_nap_lambda0nap),
+        bb_lambda_ref=float(fixed.bb_lambda_ref),
+        water_refractive_index=float(fixed.water_refractive_index),
+        theta_air=float(fixed.theta_air),
+        off_nadir=float(fixed.off_nadir),
+        q_factor=float(fixed.q_factor),
+    )
+
+
+def _estimate_shallow_substrate_pixel(
+    objective,
+    observed_rrs,
+    chl_bounds,
+    cdom_bounds,
+    nap_bounds,
+    depth_bounds,
+    substrate_fractions,
+):
+    observed_rrs = np.asarray(observed_rrs, dtype=float)
+    if observed_rrs.ndim != 1 or np.isnan(observed_rrs).any() or np.allclose(observed_rrs, 0):
+        return None
+
+    lower = np.array(
+        [float(chl_bounds[0]), float(cdom_bounds[0]), float(nap_bounds[0]), float(depth_bounds[0])],
+        dtype=float,
+    )
+    upper = np.array(
+        [float(chl_bounds[1]), float(cdom_bounds[1]), float(nap_bounds[1]), float(depth_bounds[1])],
+        dtype=float,
+    )
+    midpoint = 0.5 * (lower + upper)
+    if lower[3] > 0.0 and upper[3] > 0.0:
+        midpoint[3] = 10 ** ((math.log10(lower[3]) + math.log10(upper[3])) / 2.0)
+    lower_mid = 0.5 * (lower + midpoint)
+    upper_mid = 0.5 * (midpoint + upper)
+    starts = [midpoint, lower_mid, upper_mid]
+    fractions = np.asarray(substrate_fractions, dtype=float)
+
+    previous_observed_rrs = objective.observed_rrs
+    objective.observed_rrs = observed_rrs
+    try:
+        def objective_func(x):
+            full_parameters = np.array(
+                [float(x[0]), float(x[1]), float(x[2]), float(x[3]), fractions[0], fractions[1], fractions[2]],
+                dtype=float,
+            )
+            error_value, jacobian = objective(full_parameters)
+            return float(error_value), np.asarray(jacobian[:4], dtype=float)
+
+        best = None
+        for start in starts:
+            try:
+                res = scipy_minimize(
+                    objective_func,
+                    x0=np.asarray(start, dtype=float),
+                    method='L-BFGS-B',
+                    jac=True,
+                    bounds=[
+                        tuple(chl_bounds),
+                        tuple(cdom_bounds),
+                        tuple(nap_bounds),
+                        tuple(depth_bounds),
+                    ],
+                    options={'maxiter': 160},
+                )
+            except Exception:
+                continue
+            if best is None or float(res.fun) < float(best.fun):
+                best = res
+    finally:
+        objective.observed_rrs = previous_observed_rrs
+
+    if best is None or best.x is None:
+        return None
+
+    full_parameters = np.array(
+        [float(best.x[0]), float(best.x[1]), float(best.x[2]), float(best.x[3]), fractions[0], fractions[1], fractions[2]],
+        dtype=float,
+    )
+    model_results = _run_forward_model_for_objective_parameters(objective, full_parameters)
+    modeled_rrs = objective._filter_spectrum(model_results.rrs)
+    return {
+        'chl': float(best.x[0]),
+        'cdom': float(best.x[1]),
+        'nap': float(best.x[2]),
+        'depth': float(best.x[3]),
+        'exp_bottom': float(model_results.exp_bottom),
+        'error_alpha_f': float(_deep_water_alpha_f(observed_rrs, modeled_rrs, objective._weights)),
+        'success': bool(getattr(best, 'success', False)),
+    }
+
+
 def _write_deep_water_pixel_csv(csv_path, pixel_rows):
     if not pixel_rows:
         return
     fieldnames = ['row', 'col', 'lat', 'lon', 'chl', 'cdom', 'nap', 'error_alpha_f', 'success']
+    with open(csv_path, 'w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in pixel_rows:
+            writer.writerow(row)
+
+
+def _write_shallow_substrate_prior_pixel_csv(csv_path, pixel_rows):
+    if not pixel_rows:
+        return
+    fieldnames = [
+        'row',
+        'col',
+        'lat',
+        'lon',
+        'target_name',
+        'chl',
+        'cdom',
+        'nap',
+        'depth',
+        'exp_bottom',
+        'error_alpha_f',
+        'success',
+        'accepted_for_prior',
+    ]
     with open(csv_path, 'w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -860,9 +1061,23 @@ def _flatten_batch_run_settings_record(record):
     deep_water_selection = record.get('deep_water_selection') or {}
     deep_water_polygons = deep_water_selection.get('polygons') or []
     add('deep_water_enabled', bool(deep_water_selection))
-    add('deep_water_use_sd_bounds', deep_water_selection.get('use_sd_bounds', False))
+    add('deep_water_use_sd_bounds', record.get('deep_water_use_sd_bounds', deep_water_selection.get('use_sd_bounds', False)))
     add('deep_water_polygon_count', len(deep_water_polygons))
     add('deep_water_polygons_json', deep_water_polygons)
+
+    shallow_prior_selection = record.get('shallow_substrate_prior_selection') or {}
+    shallow_prior_polygons = shallow_prior_selection.get('polygons') or []
+    add('shallow_substrate_prior_enabled', bool(shallow_prior_selection))
+    add('shallow_substrate_prior_target_name', shallow_prior_selection.get('target_name', ''))
+    add(
+        'shallow_substrate_prior_use_sd_bounds',
+        record.get(
+            'shallow_substrate_prior_use_sd_bounds',
+            shallow_prior_selection.get('use_sd_bounds', False),
+        ),
+    )
+    add('shallow_substrate_prior_polygon_count', len(shallow_prior_polygons))
+    add('shallow_substrate_prior_polygons_json', shallow_prior_polygons)
 
     siop_payload = record.get('siop_popup') or {}
     for key, value in siop_payload.items():
@@ -1059,9 +1274,16 @@ def _resolve_execution_version_settings(
     resolved['nedr_mode'] = str(resolved['xml_dict'].get('nedr_mode', default_nedr_mode)).strip().lower()
     resolved['crop_selection'] = _parse_crop_selection(resolved['xml_dict'])
     resolved['deep_water_selection'] = _parse_deep_water_selection(resolved['xml_dict'])
+    resolved['shallow_substrate_prior_selection'] = _parse_shallow_substrate_prior_selection(resolved['xml_dict'])
     resolved['saved_sensor_band_mapping'] = _parse_saved_sensor_band_mapping(resolved['xml_dict'])
 
     warnings = []
+    if resolved['deep_water_selection'] and resolved['shallow_substrate_prior_selection']:
+        warnings.append(
+            f"{version_label}: deep-water priors and shallow-water substrate priors were both provided. "
+            "Shallow-water substrate priors take precedence; deep-water priors will be ignored."
+        )
+        resolved['deep_water_selection'] = None
     if resolved['fully_relaxed'] and not resolved['relaxed']:
         warnings.append(f"{version_label}: fully relaxed substrate mode requires relaxed constraints. Disabling fully relaxed mode.")
         resolved['fully_relaxed'] = False
@@ -3194,6 +3416,7 @@ if __name__ == "__main__":
         output_modeled_reflectance = False
         crop_selection = None
         deep_water_selection = None
+        shallow_substrate_prior_selection = None
         saved_sensor_band_mapping = None
         gui_run_versions = []
         anomaly_search_settings = dict(DEFAULT_ANOMALY_SEARCH_SETTINGS)
@@ -3220,6 +3443,7 @@ if __name__ == "__main__":
             output_modeled_reflectance = _coerce_bool(root.get('output_modeled_reflectance', False))
             crop_selection = _parse_crop_selection(root)
             deep_water_selection = _parse_deep_water_selection(root)
+            shallow_substrate_prior_selection = _parse_shallow_substrate_prior_selection(root)
             saved_sensor_band_mapping = _parse_saved_sensor_band_mapping(root)
             raw_anomaly_search_settings = {
                 'enabled': root.get('anomaly_search_enabled', False),
@@ -3270,6 +3494,7 @@ if __name__ == "__main__":
             nedr_mode = str(xml_dict.get('nedr_mode', 'fixed')).strip().lower()
             crop_selection = _parse_crop_selection(xml_dict)
             deep_water_selection = _parse_deep_water_selection(xml_dict)
+            shallow_substrate_prior_selection = _parse_shallow_substrate_prior_selection(xml_dict)
             saved_sensor_band_mapping = _parse_saved_sensor_band_mapping(xml_dict)
 
         requested_workers = max(1, cpu_count() - max(0, args.free_cpu))
@@ -3394,6 +3619,13 @@ if __name__ == "__main__":
                     'nedr_mode': resolved_version['nedr_mode'],
                     'crop_selection': copy.deepcopy(resolved_version['crop_selection']),
                     'deep_water_selection': copy.deepcopy(resolved_version['deep_water_selection']),
+                    'deep_water_use_sd_bounds': bool((resolved_version['deep_water_selection'] or {}).get('use_sd_bounds', False)),
+                    'shallow_substrate_prior_selection': copy.deepcopy(
+                        resolved_version['shallow_substrate_prior_selection']
+                    ),
+                    'shallow_substrate_prior_use_sd_bounds': bool(
+                        (resolved_version['shallow_substrate_prior_selection'] or {}).get('use_sd_bounds', False)
+                    ),
                     'siop_popup': copy.deepcopy((resolved_version.get('xml_dict') or {}).get('siop_popup', {})),
                     'sensor_popup': copy.deepcopy((resolved_version.get('xml_dict') or {}).get('sensor_popup', {})),
                     'pmin': list(np.asarray(resolved_version['pmin']).tolist()),
@@ -3458,6 +3690,7 @@ if __name__ == "__main__":
             nedr_mode = str(run_version.get('nedr_mode', nedr_mode)).strip().lower()
             crop_selection = copy.deepcopy(run_version.get('crop_selection'))
             deep_water_selection = copy.deepcopy(run_version.get('deep_water_selection'))
+            shallow_substrate_prior_selection = copy.deepcopy(run_version.get('shallow_substrate_prior_selection'))
             saved_sensor_band_mapping = copy.deepcopy(run_version.get('saved_sensor_band_mapping'))
 
             print(
@@ -3748,11 +3981,20 @@ if __name__ == "__main__":
             deep_water_lat_full = None
             deep_water_lon_full = None
             deep_water_grid_metadata = None
+            shallow_prior_rrs_full = None
+            shallow_prior_lat_full = None
+            shallow_prior_lon_full = None
+            shallow_prior_grid_metadata = None
             if deep_water_selection and lat_array is not None and lon_array is not None:
                 deep_water_rrs_full = np.array(rrs, dtype='float32', copy=True)
                 deep_water_lat_full = np.array(lat_array, dtype='float32', copy=True)
                 deep_water_lon_full = np.array(lon_array, dtype='float32', copy=True)
                 deep_water_grid_metadata = source_grid_metadata
+            if shallow_substrate_prior_selection and lat_array is not None and lon_array is not None:
+                shallow_prior_rrs_full = np.array(rrs, dtype='float32', copy=True)
+                shallow_prior_lat_full = np.array(lat_array, dtype='float32', copy=True)
+                shallow_prior_lon_full = np.array(lon_array, dtype='float32', copy=True)
+                shallow_prior_grid_metadata = source_grid_metadata
 
             # Sensor filter
             if args.path:
@@ -3773,14 +4015,194 @@ if __name__ == "__main__":
                 rrs = rrs / np.pi
                 if deep_water_rrs_full is not None:
                     deep_water_rrs_full = deep_water_rrs_full / np.pi
+                if shallow_prior_rrs_full is not None:
+                    shallow_prior_rrs_full = shallow_prior_rrs_full / np.pi
 
             if above_rrs_flag == True:
                 rrs = (2 * rrs) / ((3 * rrs) + 1)
                 if deep_water_rrs_full is not None:
                     deep_water_rrs_full = (2 * deep_water_rrs_full) / ((3 * deep_water_rrs_full) + 1)
+                if shallow_prior_rrs_full is not None:
+                    shallow_prior_rrs_full = (2 * shallow_prior_rrs_full) / ((3 * shallow_prior_rrs_full) + 1)
+
+            shallow_prior_stats = None
+            shallow_prior_csv_path = None
+            shallow_prior_mask = None
+            shallow_prior_successful_estimates = []
+            shallow_prior_accepted_estimates = []
+            if (
+                shallow_substrate_prior_selection
+                and shallow_prior_rrs_full is not None
+                and shallow_prior_lat_full is not None
+                and shallow_prior_lon_full is not None
+            ):
+                try:
+                    shallow_target_index, shallow_target_name = _resolve_shallow_substrate_target_index(
+                        shallow_substrate_prior_selection,
+                        siop.get('substrate_names', []),
+                    )
+                    if shallow_target_index is None:
+                        print(
+                            "[WARN]: Shallow-water substrate priors were provided, but the selected target "
+                            f"'{shallow_substrate_prior_selection.get('target_name', '')}' is not active in this run. "
+                            "Ignoring shallow-water priors."
+                        )
+                    else:
+                        shallow_prior_mask = _rasterize_epsg4326_geometries(
+                            shallow_substrate_prior_selection.get('polygons') or [],
+                            shallow_prior_lat_full,
+                            shallow_prior_lon_full,
+                            shallow_prior_grid_metadata,
+                        )
+                        if shallow_prior_mask is not None and np.any(shallow_prior_mask):
+                            shallow_rows, shallow_cols = np.where(shallow_prior_mask)
+                            selected_pixel_count = int(shallow_rows.size)
+                            if selected_pixel_count > _PRIOR_PIXEL_SAMPLE_LIMIT:
+                                rng = np.random.default_rng(42)
+                                chosen_indices = np.sort(
+                                    rng.choice(
+                                        selected_pixel_count,
+                                        size=_PRIOR_PIXEL_SAMPLE_LIMIT,
+                                        replace=False,
+                                    )
+                                )
+                                shallow_rows = shallow_rows[chosen_indices]
+                                shallow_cols = shallow_cols[chosen_indices]
+                                print(
+                                    f"[INFO]: Shallow-water prior polygons selected {selected_pixel_count} pixel(s); "
+                                    f"randomly subsampling {_PRIOR_PIXEL_SAMPLE_LIMIT} pixels for prior analysis."
+                                )
+                            chl_bounds = tuple(float(v) for v in siop['p_bounds'][0])
+                            cdom_bounds = tuple(float(v) for v in siop['p_bounds'][1])
+                            nap_bounds = tuple(float(v) for v in siop['p_bounds'][2])
+                            depth_bounds = tuple(float(v) for v in siop['p_bounds'][3])
+                            substrate_fractions = [0.0, 0.0, 0.0]
+                            substrate_fractions[int(shallow_target_index)] = 1.0
+                            shallow_prior_pixel_rows = []
+                            for row, col in zip(shallow_rows.tolist(), shallow_cols.tolist()):
+                                observed_rrs = shallow_prior_rrs_full[:, int(row), int(col)]
+                                estimate = _estimate_shallow_substrate_pixel(
+                                    objective,
+                                    observed_rrs,
+                                    chl_bounds,
+                                    cdom_bounds,
+                                    nap_bounds,
+                                    depth_bounds,
+                                    substrate_fractions,
+                                )
+                                if estimate is None:
+                                    continue
+                                accepted_for_prior = bool(
+                                    estimate.get('success', False)
+                                    and float(estimate.get('exp_bottom', 0.0)) >= _SHALLOW_SUBSTRATE_PRIOR_MIN_EXP_BOTTOM
+                                )
+                                pixel_row = {
+                                    'row': int(row),
+                                    'col': int(col),
+                                    'lat': float(shallow_prior_lat_full[int(row), int(col)]),
+                                    'lon': float(shallow_prior_lon_full[int(row), int(col)]),
+                                    'target_name': shallow_target_name,
+                                    'chl': estimate['chl'],
+                                    'cdom': estimate['cdom'],
+                                    'nap': estimate['nap'],
+                                    'depth': estimate['depth'],
+                                    'exp_bottom': estimate['exp_bottom'],
+                                    'error_alpha_f': estimate['error_alpha_f'],
+                                    'success': int(bool(estimate.get('success', False))),
+                                    'accepted_for_prior': int(accepted_for_prior),
+                                }
+                                shallow_prior_pixel_rows.append(pixel_row)
+                                if estimate.get('success', False):
+                                    shallow_prior_successful_estimates.append(estimate)
+                                if accepted_for_prior:
+                                    shallow_prior_accepted_estimates.append(estimate)
+                            if shallow_prior_accepted_estimates:
+                                shallow_prior_stats = _apply_iop_priors(
+                                    siop,
+                                    shallow_prior_accepted_estimates,
+                                    shallow_substrate_prior_selection.get('use_sd_bounds', False),
+                                )
+                                shallow_prior_csv_path = os.path.splitext(ofile)[0] + '_shallow_substrate_prior_pixels.csv'
+                                _write_shallow_substrate_prior_pixel_csv(
+                                    shallow_prior_csv_path,
+                                    shallow_prior_pixel_rows,
+                                )
+                                rejected_count = max(
+                                    0,
+                                    len(shallow_prior_successful_estimates) - len(shallow_prior_accepted_estimates),
+                                )
+                                print(
+                                    "[INFO]: Shallow-water substrate priors estimated from "
+                                    f"{len(shallow_prior_accepted_estimates)} accepted pixel(s) for {shallow_target_name} "
+                                    f"(out of {len(shallow_prior_successful_estimates)} converged, {rejected_count} rejected because "
+                                    f"exp_bottom < {_SHALLOW_SUBSTRATE_PRIOR_MIN_EXP_BOTTOM:g}). "
+                                    f"CHL={shallow_prior_stats['chl_mean']:.6f}, "
+                                    f"CDOM={shallow_prior_stats['cdom_mean']:.6f}, "
+                                    f"NAP={shallow_prior_stats['nap_mean']:.6f}."
+                                )
+                                if shallow_substrate_prior_selection.get('use_sd_bounds', False):
+                                    print(
+                                        "[INFO]: Applying shallow-water substrate priors as mean ± sd bounds for CHL, CDOM and NAP."
+                                    )
+                                    retained_lines = (
+                                        (
+                                            'CHL',
+                                            shallow_prior_stats['chl_mean'],
+                                            shallow_prior_stats['chl_sd'],
+                                            shallow_prior_stats['applied_pmin'][0],
+                                            shallow_prior_stats['applied_pmax'][0],
+                                        ),
+                                        (
+                                            'CDOM',
+                                            shallow_prior_stats['cdom_mean'],
+                                            shallow_prior_stats['cdom_sd'],
+                                            shallow_prior_stats['applied_pmin'][1],
+                                            shallow_prior_stats['applied_pmax'][1],
+                                        ),
+                                        (
+                                            'NAP',
+                                            shallow_prior_stats['nap_mean'],
+                                            shallow_prior_stats['nap_sd'],
+                                            shallow_prior_stats['applied_pmin'][2],
+                                            shallow_prior_stats['applied_pmax'][2],
+                                        ),
+                                    )
+                                    for name, mean_value, sd_value, lower_value, upper_value in retained_lines:
+                                        print(
+                                            f"[INFO]: Retained shallow-water {name}: "
+                                            f"mean={mean_value:.6f}, sd={sd_value:.6f}, "
+                                            f"bounds=[{lower_value:.6f}, {upper_value:.6f}]"
+                                        )
+                                else:
+                                    print(
+                                        "[INFO]: Applying shallow-water substrate priors as fixed CHL, CDOM and NAP values."
+                                    )
+                                    retained_lines = (
+                                        ('CHL', shallow_prior_stats['applied_pmin'][0]),
+                                        ('CDOM', shallow_prior_stats['applied_pmin'][1]),
+                                        ('NAP', shallow_prior_stats['applied_pmin'][2]),
+                                    )
+                                    for name, retained_value in retained_lines:
+                                        print(f"[INFO]: Retained shallow-water {name}: value={retained_value:.6f}")
+                            elif shallow_prior_successful_estimates:
+                                print(
+                                    "[WARN]: Shallow-water prior polygons converged, but every solution behaved like optically deep water "
+                                    f"(exp_bottom < {_SHALLOW_SUBSTRATE_PRIOR_MIN_EXP_BOTTOM:g}). Ignoring shallow-water priors."
+                                )
+                            else:
+                                print(
+                                    "[WARN]: Shallow-water prior polygons were provided, but no valid shallow-water parameter estimates converged. "
+                                    "Ignoring shallow-water priors."
+                                )
+                        else:
+                            print("[WARN]: Shallow-water prior polygons do not overlap the current scene grid. Ignoring shallow-water priors.")
+                except Exception as e:
+                    print(f"[WARN]: Failed to estimate shallow-water substrate priors: {e}")
 
             deep_water_prior_stats = None
             deep_water_csv_path = None
+            deep_water_mask = None
+            deep_water_successful_estimates = []
             if deep_water_selection and deep_water_rrs_full is not None and deep_water_lat_full is not None and deep_water_lon_full is not None:
                 try:
                     deep_water_mask = _rasterize_epsg4326_geometries(
@@ -3792,20 +4214,25 @@ if __name__ == "__main__":
                     if deep_water_mask is not None and np.any(deep_water_mask):
                         deep_rows, deep_cols = np.where(deep_water_mask)
                         selected_pixel_count = int(deep_rows.size)
-                        if selected_pixel_count > 1000:
+                        if selected_pixel_count > _PRIOR_PIXEL_SAMPLE_LIMIT:
                             rng = np.random.default_rng(42)
-                            chosen_indices = np.sort(rng.choice(selected_pixel_count, size=1000, replace=False))
+                            chosen_indices = np.sort(
+                                rng.choice(
+                                    selected_pixel_count,
+                                    size=_PRIOR_PIXEL_SAMPLE_LIMIT,
+                                    replace=False,
+                                )
+                            )
                             deep_rows = deep_rows[chosen_indices]
                             deep_cols = deep_cols[chosen_indices]
                             print(
                                 f"[INFO]: Deep-water polygons selected {selected_pixel_count} pixel(s); "
-                                "randomly subsampling 1000 pixels for deep-water analysis."
+                                f"randomly subsampling {_PRIOR_PIXEL_SAMPLE_LIMIT} pixels for deep-water analysis."
                             )
                         chl_bounds = tuple(float(v) for v in siop['p_bounds'][0])
                         cdom_bounds = tuple(float(v) for v in siop['p_bounds'][1])
                         nap_bounds = tuple(float(v) for v in siop['p_bounds'][2])
                         deep_water_pixel_rows = []
-                        successful_estimates = []
                         for row, col in zip(deep_rows.tolist(), deep_cols.tolist()):
                             observed_rrs = deep_water_rrs_full[:, int(row), int(col)]
                             estimate = _estimate_deep_water_pixel(
@@ -3830,18 +4257,18 @@ if __name__ == "__main__":
                             }
                             deep_water_pixel_rows.append(pixel_row)
                             if estimate.get('success', False):
-                                successful_estimates.append(estimate)
-                        if successful_estimates:
+                                deep_water_successful_estimates.append(estimate)
+                        if deep_water_successful_estimates:
                             deep_water_prior_stats = _apply_deep_water_priors(
                                 siop,
-                                successful_estimates,
+                                deep_water_successful_estimates,
                                 deep_water_selection.get('use_sd_bounds', False),
                             )
                             deep_water_csv_path = os.path.splitext(ofile)[0] + '_deep_water_pixels.csv'
                             _write_deep_water_pixel_csv(deep_water_csv_path, deep_water_pixel_rows)
                             print(
                                 "[INFO]: Deep-water priors estimated from "
-                                f"{len(successful_estimates)} selected pixel(s). "
+                                f"{len(deep_water_successful_estimates)} selected pixel(s). "
                                 f"CHL={deep_water_prior_stats['chl_mean']:.6f}, "
                                 f"CDOM={deep_water_prior_stats['cdom_mean']:.6f}, "
                                 f"NAP={deep_water_prior_stats['nap_mean']:.6f}."
@@ -3893,11 +4320,41 @@ if __name__ == "__main__":
                 except Exception as e:
                     print(f"[WARN]: Failed to estimate deep-water priors: {e}")
 
+            if not args.path and shallow_prior_stats is not None:
+                xml_dict['shallow_substrate_prior_enabled'] = True
+                xml_dict['shallow_substrate_prior_target_name'] = str(
+                    shallow_substrate_prior_selection.get('target_name', '')
+                )
+                xml_dict['shallow_substrate_prior_use_sd_bounds'] = bool(
+                    shallow_substrate_prior_selection.get('use_sd_bounds', False)
+                )
+                xml_dict['shallow_substrate_prior_selected_pixel_count'] = (
+                    int(np.count_nonzero(shallow_prior_mask))
+                    if shallow_prior_mask is not None
+                    else 0
+                )
+                xml_dict['shallow_substrate_prior_success_pixel_count'] = int(len(shallow_prior_successful_estimates))
+                xml_dict['shallow_substrate_prior_accepted_pixel_count'] = int(len(shallow_prior_accepted_estimates))
+                xml_dict['shallow_substrate_prior_csv_path'] = shallow_prior_csv_path or ''
+                xml_dict['shallow_substrate_prior_min_exp_bottom'] = _SHALLOW_SUBSTRATE_PRIOR_MIN_EXP_BOTTOM
+                xml_dict['shallow_substrate_prior_chl_mean'] = shallow_prior_stats['chl_mean']
+                xml_dict['shallow_substrate_prior_chl_sd'] = shallow_prior_stats['chl_sd']
+                xml_dict['shallow_substrate_prior_cdom_mean'] = shallow_prior_stats['cdom_mean']
+                xml_dict['shallow_substrate_prior_cdom_sd'] = shallow_prior_stats['cdom_sd']
+                xml_dict['shallow_substrate_prior_nap_mean'] = shallow_prior_stats['nap_mean']
+                xml_dict['shallow_substrate_prior_nap_sd'] = shallow_prior_stats['nap_sd']
+                xml_dict['shallow_substrate_prior_applied_pmin'] = shallow_prior_stats['applied_pmin']
+                xml_dict['shallow_substrate_prior_applied_pmax'] = shallow_prior_stats['applied_pmax']
+
             if not args.path and deep_water_prior_stats is not None:
                 xml_dict['deep_water_enabled'] = True
                 xml_dict['deep_water_use_sd_bounds'] = bool(deep_water_selection.get('use_sd_bounds', False))
-                xml_dict['deep_water_selected_pixel_count'] = int(np.count_nonzero(deep_water_mask)) if 'deep_water_mask' in locals() and deep_water_mask is not None else 0
-                xml_dict['deep_water_success_pixel_count'] = int(len(successful_estimates)) if 'successful_estimates' in locals() else 0
+                xml_dict['deep_water_selected_pixel_count'] = (
+                    int(np.count_nonzero(deep_water_mask))
+                    if deep_water_mask is not None
+                    else 0
+                )
+                xml_dict['deep_water_success_pixel_count'] = int(len(deep_water_successful_estimates))
                 xml_dict['deep_water_csv_path'] = deep_water_csv_path or ''
                 xml_dict['deep_water_chl_mean'] = deep_water_prior_stats['chl_mean']
                 xml_dict['deep_water_chl_sd'] = deep_water_prior_stats['chl_sd']

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
@@ -256,6 +257,76 @@ def test_parse_crop_selection_preserves_point_buffer():
         "mask_path": "points.shp",
         "mask_buffer_m": 75.0,
     }
+
+
+def test_parse_shallow_substrate_prior_selection_preserves_target_and_polygons():
+    polygon = {
+        "type": "Polygon",
+        "coordinates": [[[1.0, 2.0], [2.0, 2.0], [2.0, 3.0], [1.0, 2.0]]],
+    }
+
+    selection = swampy._parse_shallow_substrate_prior_selection({
+        "shallow_substrate_prior_enabled": True,
+        "shallow_substrate_prior_target_name": "Sand patch",
+        "shallow_substrate_prior_use_sd_bounds": True,
+        "shallow_substrate_prior_polygons_json": json.dumps([polygon]),
+        "shallow_substrate_prior_source_image": "scene.nc",
+    })
+
+    assert selection == {
+        "target_name": "Sand patch",
+        "polygons": [polygon],
+        "use_sd_bounds": True,
+        "source_image": "scene.nc",
+    }
+
+
+def test_resolve_execution_version_settings_prefers_shallow_priors_over_deep_water():
+    polygon = {
+        "type": "Polygon",
+        "coordinates": [[[1.0, 2.0], [2.0, 2.0], [2.0, 3.0], [1.0, 2.0]]],
+    }
+    resolved = swampy._resolve_execution_version_settings(
+        {
+            "label": "Settings 01",
+            "xml_dict": {
+                "deep_water_enabled": True,
+                "deep_water_polygons_json": json.dumps([polygon]),
+                "shallow_substrate_prior_enabled": True,
+                "shallow_substrate_prior_target_name": "Sand",
+                "shallow_substrate_prior_polygons_json": json.dumps([polygon]),
+            },
+        },
+        default_siop_xml_path="template.xml",
+        default_file_sensor="sensor.xml",
+        default_pmin=np.array([0.01, 0.02, 0.03, 0.1, 0.0, 0.0, 0.0]),
+        default_pmax=np.array([1.0, 1.0, 1.0, 30.0, 1.0, 1.0, 1.0]),
+        default_above_rrs_flag=True,
+        default_reflectance_input_flag=False,
+        default_relaxed=False,
+        default_shallow_flag=False,
+        default_optimize_initial_guesses=False,
+        default_use_five_initial_guesses=False,
+        default_initial_guess_debug=False,
+        default_fully_relaxed=False,
+        default_output_modeled_reflectance=False,
+        default_anomaly_search_settings=swampy.DEFAULT_ANOMALY_SEARCH_SETTINGS,
+        default_xml_dict={},
+        default_output_format="netcdf",
+        default_bathy_path="",
+        default_post_processing=False,
+        default_allow_split=False,
+        default_split_chunk_rows=None,
+        default_bathy_reference="depth",
+        default_bathy_correction_m=0.0,
+        default_bathy_tolerance_m=0.0,
+        default_nedr_mode="fixed",
+    )
+
+    assert resolved["deep_water_selection"] is None
+    assert resolved["shallow_substrate_prior_selection"]["target_name"] == "Sand"
+    assert resolved["warnings"]
+    assert "Shallow-water substrate priors take precedence" in resolved["warnings"][0]
 
 
 def test_anomaly_search_persistence_keys_replace_false_deep_keys():
