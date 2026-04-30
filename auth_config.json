@@ -1,0 +1,9 @@
+{
+  "config_version": 1,
+  "configured": true,
+  "app_name": "SWAMpy",
+  "kdf": "pbkdf2_sha256",
+  "iterations": 300000,
+  "salt": "4e856a9aed47514a3bab201685b99497",
+  "password_hash": "5350362e872ba414e5c190b2cbb8c590bf379cdaeb02d59964e9d7f73ecb047b"
+}

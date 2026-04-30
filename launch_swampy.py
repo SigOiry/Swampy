@@ -24,6 +24,11 @@ for _p in (_REPO_ROOT, _APP_DIR):
 # (Data/, Output/, …) resolve correctly.
 os.chdir(_REPO_ROOT)
 
+import auth
+
+if not auth.ensure_app_authorized(_REPO_ROOT):
+    sys.exit(1)
+
 # ------------------------------------------------------------------
 # Update check — runs before any app code is loaded
 # ------------------------------------------------------------------
