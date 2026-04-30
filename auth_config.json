@@ -4,6 +4,6 @@
   "app_name": "SWAMpy",
   "kdf": "pbkdf2_sha256",
   "iterations": 300000,
-  "salt": "4e856a9aed47514a3bab201685b99497",
-  "password_hash": "5350362e872ba414e5c190b2cbb8c590bf379cdaeb02d59964e9d7f73ecb047b"
+  "salt": "56f826b6bb91c9a73d32c6473fbea0fa",
+  "password_hash": "42fa476e8adf5053d1efc478ca0f9096ce87a745f0e1b956e91eedbb0b360d0b"
 }
