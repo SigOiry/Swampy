@@ -45,7 +45,7 @@ class main_sambuca:
          error_f, total_abun, sub1_norm, sub2_norm, sub3_norm, rgbimg, r_sub]=define_outputs.output_suite(result_recorder, image_info)
         return depth, sdi, kd, error_f, r_sub, sub1_frac, sub2_frac, sub3_frac, nit
 
-    def main_sambuca_func_simpl(self,observed_rrs, objective, observed_rrs_width, observed_rrs_height, sensor_filter, nedr, siop, fixed_parameters, shallow_flag, error_name, opt_met, relaxed, free_cpu=0, bathy=None, bathy_tolerance=None, bathy_exposed_mask=None, optimize_initial_guesses=False, use_five_initial_guesses=False, initial_guess_debug=False, fully_relaxed=False):
+    def main_sambuca_func_simpl(self,observed_rrs, objective, observed_rrs_width, observed_rrs_height, sensor_filter, nedr, siop, fixed_parameters, shallow_flag, error_name, opt_met, relaxed, free_cpu=0, bathy=None, bathy_tolerance=None, bathy_exposed_mask=None, optimize_initial_guesses=False, use_five_initial_guesses=False, initial_guess_debug=False):
         image_info={}
         image_info['observed_rrs_width']=observed_rrs_width
         image_info['observed_rrs_height']=observed_rrs_height
@@ -69,8 +69,7 @@ class main_sambuca:
         result_recorder=output_calculation.output_calculation(observed_rrs, objective, siop,
                                                               result_recorder, image_info, opt_met, relaxed, shallow = shallow_flag, free_cpu=free_cpu,
                                                               optimize_initial_guesses=optimize_initial_guesses,
-                                                              use_five_initial_guesses=use_five_initial_guesses,
-                                                              fully_relaxed=fully_relaxed)
+                                                              use_five_initial_guesses=use_five_initial_guesses)
         [closed_rrs, chl, cdom, nap, depth,nit, kd, sdi, \
         sub1_frac, sub2_frac, sub3_frac, error_f, total_abun, sub1_norm,\
         sub2_norm, sub3_norm, rgbimg, r_sub]=define_outputs.output_suite(result_recorder, image_info)

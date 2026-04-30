@@ -242,12 +242,24 @@ _SCENE_NEDR_MAX_PIXELS = 4096
 _SCENE_NEDR_SIGMA_MULTIPLIER = 2.0
 _PRIOR_PIXEL_SAMPLE_LIMIT = 1000
 _SHALLOW_SUBSTRATE_PRIOR_MIN_EXP_BOTTOM = 0.05
+_DEEP_WATER_IOP_RELAXED_BOUNDS = (
+    (0.0, 10),  # CHL
+    (0.0, 1.0),   # CDOM
+    (0.0, 8),   # NAP
+)
 DEFAULT_ANOMALY_SEARCH_SETTINGS = {
     'enabled': False,
     'export_local_moran_raster': False,
     'export_suspicious_binary_raster': False,
     'export_interpolated_rasters': False,
+    'seed_slope_threshold_percent': 10.0,
 }
+_ANOMALY_DEEP_PROTECTION_LOCAL_SD_WINDOW = 5
+_ANOMALY_DEEP_PROTECTION_MODAL_WINDOW = 11
+_ANOMALY_DEEP_PROTECTION_LOCAL_SD_THRESHOLD = 0.5
+_ANOMALY_DEEP_PROTECTION_SMALL_PATCH_MAX_PIXELS = 15
+_ANOMALY_SLOPE_THRESHOLD_PERCENT = 10.0
+_ANOMALY_SUSPICIOUS_MODAL_WINDOW = 3
 CHUNK_RESULT_KEYS = (
     'closed_rrs',
     'chl',
@@ -307,6 +319,20 @@ def _coerce_int(value, default=0):
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _coerce_optional_float(value, default=np.nan):
+    """Translate optional numeric-like values into float, or default."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_valid_positive_spacing(value):
+    """Return True only for finite positive numeric pixel-spacing values."""
+    value = _coerce_optional_float(value, np.nan)
+    return bool(np.isfinite(value) and value > 0.0)
 
 
 def _parse_chunk_rows(value):
@@ -382,6 +408,7 @@ def _parse_deep_water_selection(config_root):
     return {
         'polygons': valid_polygons,
         'use_sd_bounds': _coerce_bool(config_root.get('deep_water_use_sd_bounds', False), False),
+        'subsample_pixels': _coerce_bool(config_root.get('deep_water_subsample_pixels', True), True),
         'source_image': str(config_root.get('deep_water_source_image', '') or ''),
     }
 
@@ -787,7 +814,7 @@ def _estimate_deep_water_pixel(objective, observed_rrs, chl_bounds, cdom_bounds,
     }
 
 
-def _apply_iop_priors(siop, estimates, use_sd_bounds):
+def _apply_iop_priors(siop, estimates, use_sd_bounds, iop_bounds=None):
     if not estimates:
         return None
     chl_vals = np.array([item['chl'] for item in estimates], dtype=float)
@@ -806,14 +833,25 @@ def _apply_iop_priors(siop, estimates, use_sd_bounds):
     pmax = list(np.asarray(siop['p_max'], dtype=float))
     original_pmin = np.asarray(siop['p_min'], dtype=float)
     original_pmax = np.asarray(siop['p_max'], dtype=float)
+    if iop_bounds is None:
+        clip_bounds = tuple(
+            (float(original_pmin[index]), float(original_pmax[index]))
+            for index in range(3)
+        )
+    else:
+        clip_bounds = tuple(
+            (float(bounds[0]), float(bounds[1]))
+            for bounds in iop_bounds
+        )
     means = [stats['chl_mean'], stats['cdom_mean'], stats['nap_mean']]
     sds = [stats['chl_sd'], stats['cdom_sd'], stats['nap_sd']]
 
     for index, (mean_value, sd_value) in enumerate(zip(means, sds)):
-        mean_value = float(np.clip(mean_value, original_pmin[index], original_pmax[index]))
+        lower_clip, upper_clip = clip_bounds[index]
+        mean_value = float(np.clip(mean_value, lower_clip, upper_clip))
         if use_sd_bounds and np.isfinite(sd_value) and sd_value > 0.0:
-            lower = max(float(original_pmin[index]), mean_value - float(sd_value))
-            upper = min(float(original_pmax[index]), mean_value + float(sd_value))
+            lower = max(lower_clip, mean_value - float(sd_value))
+            upper = min(upper_clip, mean_value + float(sd_value))
             if lower > upper:
                 lower = upper = mean_value
         else:
@@ -831,7 +869,12 @@ def _apply_iop_priors(siop, estimates, use_sd_bounds):
 
 
 def _apply_deep_water_priors(siop, estimates, use_sd_bounds):
-    return _apply_iop_priors(siop, estimates, use_sd_bounds)
+    return _apply_iop_priors(
+        siop,
+        estimates,
+        use_sd_bounds,
+        iop_bounds=_DEEP_WATER_IOP_RELAXED_BOUNDS,
+    )
 
 
 def _normalise_label_key(value):
@@ -970,15 +1013,68 @@ def _estimate_shallow_substrate_pixel(
     }
 
 
-def _write_deep_water_pixel_csv(csv_path, pixel_rows):
+def _write_deep_water_iop_raster(tif_path, pixel_rows, width, height, lat_data, lon_data, shape_geo_val,
+                                 grid_metadata=None):
     if not pixel_rows:
-        return
-    fieldnames = ['row', 'col', 'lat', 'lon', 'chl', 'cdom', 'nap', 'error_alpha_f', 'success']
-    with open(csv_path, 'w', newline='', encoding='utf-8') as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in pixel_rows:
-            writer.writerow(row)
+        return None
+    if lat_data is None or lon_data is None:
+        print("[WARN]: Skipping deep-water IOP raster export: lat/lon not available to derive georeferencing.")
+        return None
+
+    band_defs = (
+        ('chl', 'CHL'),
+        ('cdom', 'CDOM'),
+        ('nap', 'NAP'),
+    )
+    layers = {
+        key: ma.masked_all((height, width), dtype='float32')
+        for key, _label in band_defs
+    }
+    written_pixel_count = 0
+    for pixel_row in pixel_rows:
+        if not _coerce_bool(pixel_row.get('success', False), False):
+            continue
+        try:
+            row_index = int(pixel_row.get('row'))
+            col_index = int(pixel_row.get('col'))
+        except (TypeError, ValueError):
+            continue
+        if row_index < 0 or row_index >= height or col_index < 0 or col_index >= width:
+            continue
+
+        values = {}
+        for key, _label in band_defs:
+            try:
+                value = float(pixel_row.get(key))
+            except (TypeError, ValueError):
+                value = np.nan
+            if not np.isfinite(value):
+                values = {}
+                break
+            values[key] = value
+        if not values:
+            continue
+
+        for key, value in values.items():
+            layers[key][row_index, col_index] = np.float32(value)
+        written_pixel_count += 1
+
+    if written_pixel_count == 0:
+        return None
+
+    transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
+    _write_geotiff(
+        tif_path,
+        [(label, layers[key]) for key, label in band_defs],
+        transform,
+        crs,
+        height,
+        width,
+        nodata=OUTPUT_FILL_VALUE)
+    return {
+        'path': tif_path,
+        'written_pixel_count': written_pixel_count,
+    }
 
 
 def _write_shallow_substrate_prior_pixel_csv(csv_path, pixel_rows):
@@ -1062,6 +1158,7 @@ def _flatten_batch_run_settings_record(record):
     deep_water_polygons = deep_water_selection.get('polygons') or []
     add('deep_water_enabled', bool(deep_water_selection))
     add('deep_water_use_sd_bounds', record.get('deep_water_use_sd_bounds', deep_water_selection.get('use_sd_bounds', False)))
+    add('deep_water_subsample_pixels', deep_water_selection.get('subsample_pixels', True))
     add('deep_water_polygon_count', len(deep_water_polygons))
     add('deep_water_polygons_json', deep_water_polygons)
 
@@ -1097,7 +1194,10 @@ def _flatten_batch_run_settings_record(record):
     add('rrs_flag', record.get('rrs_flag', True))
     add('reflectance_input', record.get('reflectance_input', False))
     add('relaxed', record.get('relaxed', False))
-    add('fully_relaxed', record.get('fully_relaxed', False))
+    add(
+        'standardize_relaxed_substrate_outputs',
+        record.get('standardize_relaxed_substrate_outputs', False),
+    )
     add('shallow', record.get('shallow', False))
     add('optimize_initial_guesses', record.get('optimize_initial_guesses', False))
     add('use_five_initial_guesses', record.get('use_five_initial_guesses', False))
@@ -1215,7 +1315,7 @@ def _resolve_execution_version_settings(
     default_optimize_initial_guesses,
     default_use_five_initial_guesses,
     default_initial_guess_debug,
-    default_fully_relaxed,
+    default_standardize_relaxed_substrate_outputs,
     default_output_modeled_reflectance,
     default_anomaly_search_settings,
     default_xml_dict,
@@ -1249,7 +1349,13 @@ def _resolve_execution_version_settings(
         'optimize_initial_guesses': _coerce_bool(run_version.get('optimize_initial_guesses', default_optimize_initial_guesses), default_optimize_initial_guesses),
         'use_five_initial_guesses': _coerce_bool(run_version.get('use_five_initial_guesses', default_use_five_initial_guesses), default_use_five_initial_guesses),
         'initial_guess_debug': _coerce_bool(run_version.get('initial_guess_debug', default_initial_guess_debug), default_initial_guess_debug),
-        'fully_relaxed': _coerce_bool(run_version.get('fully_relaxed', default_fully_relaxed), default_fully_relaxed),
+        'standardize_relaxed_substrate_outputs': _coerce_bool(
+            run_version.get(
+                'standardize_relaxed_substrate_outputs',
+                default_standardize_relaxed_substrate_outputs,
+            ),
+            default_standardize_relaxed_substrate_outputs,
+        ),
         'output_modeled_reflectance': _coerce_bool(run_version.get('output_modeled_reflectance', default_output_modeled_reflectance), default_output_modeled_reflectance),
         'bathy_path': _resolve_bundled_resource(run_version.get('bathy_path', default_bathy_path)),
         'xml_dict': copy.deepcopy(run_version.get('xml_dict', default_xml_dict)),
@@ -1284,9 +1390,8 @@ def _resolve_execution_version_settings(
             "Shallow-water substrate priors take precedence; deep-water priors will be ignored."
         )
         resolved['deep_water_selection'] = None
-    if resolved['fully_relaxed'] and not resolved['relaxed']:
-        warnings.append(f"{version_label}: fully relaxed substrate mode requires relaxed constraints. Disabling fully relaxed mode.")
-        resolved['fully_relaxed'] = False
+    if resolved['standardize_relaxed_substrate_outputs'] and not resolved['relaxed']:
+        resolved['standardize_relaxed_substrate_outputs'] = False
 
     if resolved['use_five_initial_guesses'] and not resolved['optimize_initial_guesses']:
         warnings.append(f"{version_label}: five-point initial guess testing requires initial guess optimisation. Disabling 5-point testing.")
@@ -1660,7 +1765,7 @@ def _chunk_tuple_to_dict(chunk_tuple):
 def _run_chunked_model(algo, rrs, width, height, image_info, siop, fixed_parameters,
                        shallow_flag, error_name, opt_met, relaxed, free_cpu,
                        bathy_arr, bathy_exposed_mask, bathy_tolerance, objective,
-                       optimize_initial_guesses=False, use_five_initial_guesses=False, initial_guess_debug=False, fully_relaxed=False, chunk_rows_override=None,
+                       optimize_initial_guesses=False, use_five_initial_guesses=False, initial_guess_debug=False, chunk_rows_override=None,
                        chunk_dir=None):
     """Process the image chunk-by-chunk, writing intermediate results to disk."""
     if chunk_dir is None:
@@ -1698,8 +1803,7 @@ def _run_chunked_model(algo, rrs, width, height, image_info, siop, fixed_paramet
             bathy_exposed_mask=chunk_bathy_exposed,
             optimize_initial_guesses=optimize_initial_guesses,
             use_five_initial_guesses=use_five_initial_guesses,
-            initial_guess_debug=initial_guess_debug,
-            fully_relaxed=fully_relaxed)
+            initial_guess_debug=initial_guess_debug)
 
         chunk_data = _chunk_tuple_to_dict(chunk_result)
         if chunk_data.get('initial_guess_stack') is None:
@@ -1728,21 +1832,40 @@ def _load_chunk_file(chunk_path, fill_value=OUTPUT_FILL_VALUE):
     return row_start, row_end, chunk_arrays
 
 
-def _compute_chunk_substrate_norms(chunk_arrays, relaxed, substrate_var_names, fully_relaxed=False):
-    if fully_relaxed:
-        n1 = ma.array(chunk_arrays['sub1_frac'], copy=False)
-        n2 = ma.array(chunk_arrays['sub2_frac'], copy=False)
-        n3 = ma.array(chunk_arrays['sub3_frac'], copy=False)
+def _compute_chunk_substrate_norms(chunk_arrays, relaxed, substrate_var_names,
+                                   standardize_relaxed_substrate_outputs=False):
+    sub1_frac = ma.array(chunk_arrays['sub1_frac'], copy=False)
+    sub2_frac = ma.array(chunk_arrays['sub2_frac'], copy=False)
+    sub3_frac = ma.array(chunk_arrays['sub3_frac'], copy=False)
+    total_abun = chunk_arrays.get('total_abun')
+    if total_abun is None:
+        total_abun = sub1_frac + sub2_frac + sub3_frac
     else:
-        denom = chunk_arrays['sub1_frac'] + chunk_arrays['sub2_frac'] + chunk_arrays['sub3_frac']
+        total_abun = ma.array(total_abun, copy=False)
+
+    should_standardize = (not relaxed) or bool(standardize_relaxed_substrate_outputs)
+    if should_standardize:
         with np.errstate(divide='ignore', invalid='ignore'):
-            n1 = ma.divide(chunk_arrays['sub1_frac'], denom)
-            n2 = ma.divide(chunk_arrays['sub2_frac'], denom)
-            n3 = ma.divide(chunk_arrays['sub3_frac'], denom)
+            n1 = ma.divide(sub1_frac, total_abun)
+            n2 = ma.divide(sub2_frac, total_abun)
+            n3 = ma.divide(sub3_frac, total_abun)
+    else:
+        n1 = sub1_frac
+        n2 = sub2_frac
+        n3 = sub3_frac
+
+    if relaxed:
+        sum_of_substrats = total_abun
+    else:
+        sum_of_substrats = ma.array(
+            np.ones(total_abun.shape, dtype=np.float32),
+            mask=ma.getmaskarray(total_abun),
+        )
     return {
         substrate_var_names[0]: n1,
         substrate_var_names[1]: n2,
         substrate_var_names[2]: n3,
+        'sum_of_substrats': sum_of_substrats,
     }
 
 
@@ -1864,6 +1987,33 @@ def _derive_pixel_spacing_meters(lat, lon, shape_geo):
     return dx, dy
 
 
+def _derive_projected_pixel_spacing_meters(grid_metadata=None):
+    """Estimate pixel spacing in metres from projected grid metadata."""
+    if not grid_metadata:
+        return np.nan, np.nan
+
+    crs = grid_metadata.get('crs')
+    if crs is None or not getattr(crs, 'is_projected', False):
+        return np.nan, np.nan
+
+    transform = grid_metadata.get('transform')
+    if transform is not None:
+        dx = math.hypot(float(transform.a), float(transform.d))
+        dy = math.hypot(float(transform.b), float(transform.e))
+        if np.isfinite(dx) and dx > 0.0 and np.isfinite(dy) and dy > 0.0:
+            return float(dx), float(dy)
+
+    x_coords = grid_metadata.get('x_coords')
+    y_coords = grid_metadata.get('y_coords')
+    dx = np.nan
+    dy = np.nan
+    if x_coords is not None:
+        dx = _median_valid_distance(np.abs(np.diff(np.asarray(x_coords, dtype=float))))
+    if y_coords is not None:
+        dy = _median_valid_distance(np.abs(np.diff(np.asarray(y_coords, dtype=float))))
+    return dx, dy
+
+
 def _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo, dx_m=None, dy_m=None):
     """Compute rise/run slope ratio from a depth raster."""
     depth = ma.array(depth_data)
@@ -1872,9 +2022,13 @@ def _compute_depth_slope_ratio(depth_data, lat, lon, shape_geo, dx_m=None, dy_m=
     if depth_values.ndim != 2 or depth_values.shape[0] < 2 or depth_values.shape[1] < 2:
         raise RuntimeError("Slope calculation requires at least a 2x2 depth raster.")
 
-    if not (np.isfinite(dx_m) and dx_m > 0.0 and np.isfinite(dy_m) and dy_m > 0.0):
+    dx_m = _coerce_optional_float(dx_m, np.nan)
+    dy_m = _coerce_optional_float(dy_m, np.nan)
+    if not (_is_valid_positive_spacing(dx_m) and _is_valid_positive_spacing(dy_m)):
         dx_m, dy_m = _derive_pixel_spacing_meters(lat, lon, shape_geo)
-    if not np.isfinite(dx_m) or dx_m <= 0.0 or not np.isfinite(dy_m) or dy_m <= 0.0:
+    dx_m = _coerce_optional_float(dx_m, np.nan)
+    dy_m = _coerce_optional_float(dy_m, np.nan)
+    if not _is_valid_positive_spacing(dx_m) or not _is_valid_positive_spacing(dy_m):
         raise RuntimeError("Unable to derive valid pixel spacing for slope calculation.")
 
     dz_dy, dz_dx = np.gradient(depth_values, dy_m, dx_m)
@@ -1902,14 +2056,35 @@ def _compute_depth_slope_percent(depth_data, lat, lon, shape_geo, dx_m=None, dy_
 def _normalise_anomaly_search_settings(raw_settings):
     settings = dict(DEFAULT_ANOMALY_SEARCH_SETTINGS)
     if isinstance(raw_settings, dict):
-        for key in settings:
+        for key in (
+            'enabled',
+            'export_local_moran_raster',
+            'export_suspicious_binary_raster',
+            'export_interpolated_rasters',
+        ):
             if key in raw_settings:
                 settings[key] = _coerce_bool(raw_settings.get(key), settings[key])
+        if 'seed_slope_threshold_percent' in raw_settings and raw_settings.get('seed_slope_threshold_percent') not in (None, ''):
+            settings['seed_slope_threshold_percent'] = _coerce_float(
+                raw_settings.get('seed_slope_threshold_percent'),
+                settings['seed_slope_threshold_percent'],
+            )
+        elif 'seed_slope_threshold_degrees' in raw_settings and raw_settings.get('seed_slope_threshold_degrees') not in (None, ''):
+            legacy_threshold_degrees = _coerce_float(raw_settings.get('seed_slope_threshold_degrees'), np.nan)
+            if np.isfinite(legacy_threshold_degrees):
+                settings['seed_slope_threshold_percent'] = 100.0 * math.tan(math.radians(legacy_threshold_degrees))
     return settings
 
 
 def _finalise_anomaly_search_settings(raw_settings, use_input_bathy=False):
     settings = _normalise_anomaly_search_settings(raw_settings)
+    slope_threshold = _coerce_float(
+        settings.get('seed_slope_threshold_percent'),
+        DEFAULT_ANOMALY_SEARCH_SETTINGS['seed_slope_threshold_percent'],
+    )
+    if not np.isfinite(slope_threshold) or slope_threshold <= 0.0:
+        slope_threshold = DEFAULT_ANOMALY_SEARCH_SETTINGS['seed_slope_threshold_percent']
+    settings['seed_slope_threshold_percent'] = float(slope_threshold)
     if use_input_bathy:
         settings['enabled'] = False
     return settings
@@ -1931,6 +2106,175 @@ def _compute_row_standardized_neighbour_mean(values, valid_mask, structure=None)
     neighbour_mean = np.full(values.shape, np.nan, dtype='float32')
     np.divide(neighbour_sum, neighbour_count, out=neighbour_mean, where=neighbour_count > 0.0)
     return neighbour_mean
+
+
+def _compute_local_sd_ignore_nan(values, valid_mask, window_size):
+    """Return focal standard deviation while ignoring invalid pixels."""
+    values = np.asarray(values, dtype='float32')
+    valid_mask = np.asarray(valid_mask, dtype=bool)
+    window_size = int(max(1, window_size))
+    window_area = float(window_size * window_size)
+
+    valid_float = valid_mask.astype('float32', copy=False)
+    count = ndimage.uniform_filter(valid_float, size=window_size, mode='constant', cval=0.0) * window_area
+
+    filled = np.where(valid_mask, values, 0.0).astype('float32', copy=False)
+    value_sum = ndimage.uniform_filter(filled, size=window_size, mode='constant', cval=0.0) * window_area
+    value_sq_sum = ndimage.uniform_filter(filled * filled, size=window_size, mode='constant', cval=0.0) * window_area
+
+    mean = np.full(values.shape, np.nan, dtype='float32')
+    variance = np.full(values.shape, np.nan, dtype='float32')
+    np.divide(value_sum, count, out=mean, where=count > 0.0)
+    np.divide(value_sq_sum, count, out=variance, where=count > 0.0)
+    variance = variance - (mean * mean)
+    variance = np.where(count >= 2.0, np.maximum(variance, 0.0), np.nan)
+    local_sd = np.sqrt(np.maximum(variance, 0.0)).astype('float32', copy=False)
+    local_sd[~np.isfinite(variance)] = np.nan
+    return local_sd
+
+
+def _majority_filter(mask, window_size):
+    """Return a majority-filtered binary mask."""
+    mask = np.asarray(mask, dtype=bool)
+    window_size = int(max(1, window_size))
+    neighbourhood_fraction = ndimage.uniform_filter(
+        mask.astype('float32', copy=False),
+        size=window_size,
+        mode='constant',
+        cval=0.0,
+    )
+    return np.asarray(neighbourhood_fraction >= 0.5, dtype=bool)
+
+
+def _clear_small_enclosed_true_components(mask, max_pixels=15, structure=None):
+    """Clear small internal True components while keeping border-touching ones."""
+    mask = np.asarray(mask, dtype=bool)
+    max_pixels = int(max(0, max_pixels))
+    if structure is None:
+        structure = np.ones((3, 3), dtype=bool)
+    else:
+        structure = np.asarray(structure, dtype=bool)
+
+    labels, component_count = ndimage.label(mask, structure=structure)
+    filtered = np.array(mask, copy=True)
+    if max_pixels <= 0 or component_count <= 0:
+        return filtered
+
+    for label_idx in range(1, component_count + 1):
+        component = labels == label_idx
+        component_size = int(np.count_nonzero(component))
+        if component_size <= 0 or component_size >= max_pixels:
+            continue
+        touches_border = (
+            np.any(component[0, :]) or np.any(component[-1, :])
+            or np.any(component[:, 0]) or np.any(component[:, -1])
+        )
+        if touches_border:
+            continue
+        filtered[component] = False
+    return filtered
+
+
+def _fill_small_enclosed_false_components(mask, max_pixels=15, structure=None):
+    """Fill small internal False holes while keeping border-connected ones."""
+    mask = np.asarray(mask, dtype=bool)
+    filled_complement = _clear_small_enclosed_true_components(
+        ~mask,
+        max_pixels=max_pixels,
+        structure=structure,
+    )
+    return np.asarray(~filled_complement, dtype=bool)
+
+
+def _collapse_enclosed_binary_regions(mask, structure=None, max_iterations=4):
+    """Remove enclosed islands and holes regardless of component size."""
+    mask = np.asarray(mask, dtype=bool)
+    if structure is None:
+        structure = np.ones((3, 3), dtype=bool)
+    else:
+        structure = np.asarray(structure, dtype=bool)
+
+    collapsed = np.array(mask, copy=True)
+    for _ in range(max(1, int(max_iterations))):
+        updated = np.asarray(
+            ndimage.binary_fill_holes(collapsed, structure=structure),
+            dtype=bool,
+        )
+        updated = np.asarray(
+            ~ndimage.binary_fill_holes(~updated, structure=structure),
+            dtype=bool,
+        )
+        if np.array_equal(updated, collapsed):
+            break
+        collapsed = updated
+    return collapsed
+
+
+def _remove_border_touching_components(mask, structure=None):
+    """Remove connected True components that touch the image border."""
+    mask = np.asarray(mask, dtype=bool)
+    if structure is None:
+        structure = np.ones((3, 3), dtype=bool)
+    else:
+        structure = np.asarray(structure, dtype=bool)
+
+    labels, component_count = ndimage.label(mask, structure=structure)
+    if component_count <= 0:
+        return np.array(mask, copy=True)
+
+    filtered = np.array(mask, copy=True)
+    for label_idx in range(1, component_count + 1):
+        component = labels == label_idx
+        if (
+            np.any(component[0, :]) or np.any(component[-1, :])
+            or np.any(component[:, 0]) or np.any(component[:, -1])
+        ):
+            filtered[component] = False
+    return filtered
+
+
+def _build_anomaly_search_deep_protection_mask(
+    depth_data,
+    depth_min=0.1,
+    local_sd_window=_ANOMALY_DEEP_PROTECTION_LOCAL_SD_WINDOW,
+    modal_window=_ANOMALY_DEEP_PROTECTION_MODAL_WINDOW,
+    local_sd_threshold=_ANOMALY_DEEP_PROTECTION_LOCAL_SD_THRESHOLD,
+    small_patch_max_pixels=_ANOMALY_DEEP_PROTECTION_SMALL_PATCH_MAX_PIXELS,
+):
+    """Build a stable-deep protection mask from the depth raster.
+
+    This mirrors the user's R workflow:
+    - ignore pixels shallower than the minimum depth bound,
+    - compute a 5x5 focal SD on depth,
+    - threshold SD > 0.5,
+    - smooth with an 11x11 modal/majority filter,
+    - collapse enclosed holes/islands so the true-deep mask stays spatially coherent.
+    """
+    depth_ma = ma.array(depth_data, copy=False)
+    depth_arr = np.asarray(depth_ma.filled(np.nan), dtype='float32')
+    depth_mask = ma.getmaskarray(depth_ma)
+    valid_mask = (
+        (~depth_mask)
+        & np.isfinite(depth_arr)
+        & (depth_arr >= float(depth_min))
+    )
+    if np.count_nonzero(valid_mask) == 0:
+        return np.zeros(depth_arr.shape, dtype=bool)
+
+    local_sd = _compute_local_sd_ignore_nan(depth_arr, valid_mask, window_size=local_sd_window)
+    deep_pixel_seed = valid_mask & np.isfinite(local_sd) & (local_sd > float(local_sd_threshold))
+    if not np.any(deep_pixel_seed):
+        return np.zeros(depth_arr.shape, dtype=bool)
+
+    protected_mask = _majority_filter(deep_pixel_seed, window_size=modal_window) & valid_mask
+    # Only remove small isolated noise patches — do NOT fill enclosed holes.
+    # _collapse_enclosed_binary_regions uses binary_fill_holes which would flood the interior
+    # of any ring-shaped boundary mask (e.g. a false-deep vegetated patch surrounded by
+    # high-SD boundary pixels), incorrectly marking the false-deep centre as "stable deep".
+    protected_mask = _clear_small_enclosed_true_components(
+        protected_mask, max_pixels=int(small_patch_max_pixels)
+    ) & valid_mask
+    return np.asarray(protected_mask, dtype=bool)
 
 
 def _interpolate_suspicious_parameter_maps(parameter_maps, source_mask, target_mask):
@@ -2026,162 +2370,162 @@ def _build_substrate_only_rerun_items(result_recorder, suspicious_mask, interpol
     return rerun_items
 
 
-def _detect_local_moran_anomaly_pixels(depth_data, sdi_data, depth_min=0.1, exposed_mask=None, protected_mask=None):
-    """Detect suspicious false-deep plateaus from abrupt depth jumps and SDI drops.
+def _detect_local_moran_anomaly_pixels(
+    depth_data,
+    sdi_data=None,
+    depth_min=0.1,
+    exposed_mask=None,
+    protected_mask=None,
+    lat_data=None,
+    lon_data=None,
+    shape_geo=2,
+    grid_metadata=None,
+    dx_m=None,
+    dy_m=None,
+    slope_threshold_percent=_ANOMALY_SLOPE_THRESHOLD_PERCENT,
+    suspicious_modal_window=_ANOMALY_SUSPICIOUS_MODAL_WINDOW,
+):
+    """Detect suspicious regions from steep bathymetry jumps.
 
-    The output is a detection-only product. It does not modify the optimisation
-    result; it only identifies suspicious patches and exposes debug rasters for
-    the edge/plateau detector.
+    Detection is based on:
+    - a true-deep protection mask supplied through ``protected_mask``,
+    - all depth-only slopes above the configured threshold, and
+    - enclosed lower-slope patches that are deeper than the direct outside of
+      the steep belt that surrounds them.
     """
+    _ = sdi_data, depth_min  # kept for compatibility with saved workflows and tests
     depth_ma = ma.array(depth_data, copy=False)
-    sdi_ma = ma.array(sdi_data, copy=False)
     depth_arr = np.asarray(depth_ma.filled(np.nan), dtype='float32')
-    sdi_arr = np.asarray(sdi_ma.filled(np.nan), dtype='float32')
     depth_mask = ma.getmaskarray(depth_ma)
-    sdi_mask = ma.getmaskarray(sdi_ma)
-    valid_mask = (
-        (~depth_mask)
-        & (~sdi_mask)
-        & np.isfinite(depth_arr)
-        & np.isfinite(sdi_arr)
-        & (depth_arr > float(depth_min))
-        & (sdi_arr <= 20.0)
-    )
+    valid_mask = (~depth_mask) & np.isfinite(depth_arr)
     if exposed_mask is not None:
         valid_mask &= ~np.asarray(exposed_mask, dtype=bool)
 
     result = {
         'depth_jump': ma.masked_all(depth_arr.shape, dtype='float32'),
         'sdi_drop': ma.masked_all(depth_arr.shape, dtype='float32'),
+        'slope_percent': ma.masked_all(depth_arr.shape, dtype='float32'),
         'suspicious_mask': np.zeros(depth_arr.shape, dtype=bool),
         'seed_mask': np.zeros(depth_arr.shape, dtype=bool),
+        'depth_only_seed_mask': np.zeros(depth_arr.shape, dtype=bool),
+        'confident_mask': np.zeros(depth_arr.shape, dtype=bool),
         'valid_mask': valid_mask,
+        'protected_mask': np.zeros(depth_arr.shape, dtype=bool),
         'component_count': 0,
         'suspicious_pixel_count': 0,
         'depth_jump_threshold_m': np.nan,
         'sdi_drop_threshold': np.nan,
+        'slope_threshold_percent': float(slope_threshold_percent),
     }
-    if np.count_nonzero(valid_mask) < 9:
+    if np.count_nonzero(valid_mask) < 4:
         return result
 
     protected_mask = np.zeros(depth_arr.shape, dtype=bool) if protected_mask is None else np.asarray(protected_mask, dtype=bool)
+    result['protected_mask'] = protected_mask
     analysis_mask = valid_mask & ~protected_mask
-    if np.count_nonzero(analysis_mask) < 9:
+    if np.count_nonzero(analysis_mask) < 4:
         return result
 
-    depth_values = depth_arr[valid_mask].astype('float64', copy=False)
-    sdi_values = sdi_arr[valid_mask].astype('float64', copy=False)
-    if depth_values.size < 9 or sdi_values.size < 9:
+    dx_m = _coerce_optional_float(dx_m, np.nan)
+    dy_m = _coerce_optional_float(dy_m, np.nan)
+    if not (_is_valid_positive_spacing(dx_m) and _is_valid_positive_spacing(dy_m)):
+        dx_m, dy_m = _derive_projected_pixel_spacing_meters(grid_metadata)
+    dx_m = _coerce_optional_float(dx_m, np.nan)
+    dy_m = _coerce_optional_float(dy_m, np.nan)
+    if not (_is_valid_positive_spacing(dx_m) and _is_valid_positive_spacing(dy_m)):
+        if lat_data is None or lon_data is None:
+            return result
+        dx_m, dy_m = _derive_pixel_spacing_meters(lat_data, lon_data, shape_geo)
+    dx_m = _coerce_optional_float(dx_m, np.nan)
+    dy_m = _coerce_optional_float(dy_m, np.nan)
+    if not (_is_valid_positive_spacing(dx_m) and _is_valid_positive_spacing(dy_m)):
         return result
 
-    depth_median = float(np.median(depth_values))
-    depth_mad = float(np.median(np.abs(depth_values - depth_median)))
-    depth_sigma = 1.4826 * depth_mad if np.isfinite(depth_mad) and depth_mad > 0.0 else float(np.std(depth_values))
-    if not np.isfinite(depth_sigma) or depth_sigma <= 1.0e-6:
-        depth_sigma = float(np.std(depth_values))
-    sdi_median = float(np.median(sdi_values))
-    sdi_mad = float(np.median(np.abs(sdi_values - sdi_median)))
-    sdi_sigma = 1.4826 * sdi_mad if np.isfinite(sdi_mad) and sdi_mad > 0.0 else float(np.std(sdi_values))
-    if not np.isfinite(sdi_sigma) or sdi_sigma <= 1.0e-6:
-        sdi_sigma = float(np.std(sdi_values))
-    if not np.isfinite(depth_sigma) or depth_sigma <= 1.0e-6 or not np.isfinite(sdi_sigma) or sdi_sigma <= 1.0e-6:
+    slope_percent = _compute_depth_slope_percent(
+        depth_ma,
+        lat_data,
+        lon_data,
+        shape_geo,
+        dx_m=dx_m,
+        dy_m=dy_m,
+    )
+    slope_arr = np.asarray(slope_percent.filled(np.nan), dtype='float32')
+    slope_mask = ma.getmaskarray(slope_percent)
+    result['slope_percent'] = ma.masked_array(
+        slope_arr,
+        mask=~valid_mask | slope_mask | ~np.isfinite(slope_arr),
+    )
+
+    structure = np.ones((3, 3), dtype=bool)
+    protected_buffer_mask = (
+        ndimage.binary_dilation(protected_mask, structure=structure)
+        if np.any(protected_mask)
+        else np.zeros(depth_arr.shape, dtype=bool)
+    )
+    search_mask = analysis_mask & ~protected_buffer_mask
+
+    steep_mask = search_mask & np.isfinite(slope_arr) & (slope_arr >= float(slope_threshold_percent))
+    if not np.any(steep_mask):
         return result
 
-    neighbour_mean_sdi = _compute_row_standardized_neighbour_mean(sdi_arr, valid_mask)
-    neighbour_mean_depth = _compute_row_standardized_neighbour_mean(depth_arr, valid_mask)
-    depth_jump = depth_arr - neighbour_mean_depth
-    sdi_drop = neighbour_mean_sdi - sdi_arr
-    result['depth_jump'] = ma.masked_array(depth_jump.astype('float32', copy=False), mask=~valid_mask | ~np.isfinite(depth_jump))
-    result['sdi_drop'] = ma.masked_array(sdi_drop.astype('float32', copy=False), mask=~valid_mask | ~np.isfinite(sdi_drop))
-
-    positive_depth_jump = depth_jump[analysis_mask & np.isfinite(depth_jump) & (depth_jump > 0.0)]
-    depth_jump_threshold = (
-        float(np.percentile(positive_depth_jump, 60.0))
-        if positive_depth_jump.size >= 4
-        else max(0.12, 0.25 * depth_sigma)
-    )
-    depth_jump_threshold = max(0.12, min(depth_jump_threshold, 0.75 * depth_sigma))
-
-    positive_sdi_drop = sdi_drop[analysis_mask & np.isfinite(sdi_drop) & (sdi_drop > 0.0)]
-    sdi_drop_threshold = (
-        float(np.percentile(positive_sdi_drop, 60.0))
-        if positive_sdi_drop.size >= 4
-        else max(0.03, 0.25 * sdi_sigma)
-    )
-    sdi_drop_threshold = max(0.03, min(sdi_drop_threshold, 0.75 * sdi_sigma))
-
-    seed_mask = (
-        analysis_mask
-        & np.isfinite(depth_jump)
-        & np.isfinite(sdi_drop)
-        & (depth_jump >= depth_jump_threshold)
-        & (sdi_drop >= sdi_drop_threshold)
-    )
-    result['seed_mask'] = seed_mask
-    result['depth_jump_threshold_m'] = depth_jump_threshold
-    result['sdi_drop_threshold'] = sdi_drop_threshold
+    seed_mask = np.asarray(steep_mask, dtype=bool)
+    result['seed_mask'] = np.asarray(seed_mask, dtype=bool)
+    result['depth_only_seed_mask'] = np.asarray(seed_mask, dtype=bool)
     if not np.any(seed_mask):
         return result
 
-    structure = np.ones((3, 3), dtype=bool)
-    seed_labels, seed_count = ndimage.label(seed_mask, structure=structure)
-    suspicious_mask = np.zeros(depth_arr.shape, dtype=bool)
-    for label_idx in range(1, seed_count + 1):
-        seed_component = seed_labels == label_idx
-        if not np.any(seed_component):
-            continue
-        seed_depth_median = float(np.nanmedian(depth_arr[seed_component]))
-        seed_sdi_median = float(np.nanmedian(sdi_arr[seed_component]))
-        if not np.isfinite(seed_depth_median) or not np.isfinite(seed_sdi_median):
-            continue
-        depth_floor = max(float(depth_min), min(seed_depth_median * 0.80, seed_depth_median - (0.50 * depth_jump_threshold)))
-        local_sdi_tolerance = max(0.05, 1.50 * sdi_drop_threshold)
-        max_seed_sdi = seed_sdi_median + max(local_sdi_tolerance, 0.50 * sdi_sigma)
-        growth_mask = (
-            analysis_mask
-            & (depth_arr >= depth_floor)
-            & (sdi_arr <= max_seed_sdi)
-        )
-        grown_component = ndimage.binary_propagation(seed_component, structure=structure, mask=growth_mask)
-        grown_component = np.asarray(grown_component, dtype=bool) | seed_component
-        grown_component = np.asarray(ndimage.binary_fill_holes(grown_component), dtype=bool) & analysis_mask
-        if not np.any(grown_component):
-            continue
+    suspicious_mask = np.asarray(seed_mask, dtype=bool)
 
-        touches_border = (
-            np.any(grown_component[0, :]) or np.any(grown_component[-1, :])
-            or np.any(grown_component[:, 0]) or np.any(grown_component[:, -1])
-        )
-        if touches_border:
+    low_slope_mask = search_mask & ~steep_mask
+    low_slope_labels, low_slope_count = ndimage.label(low_slope_mask, structure=structure)
+    for label_idx in range(1, low_slope_count + 1):
+        component_mask = low_slope_labels == label_idx
+        if not np.any(component_mask):
             continue
-
-        surrounding_ring = ndimage.binary_dilation(grown_component, structure=structure) & valid_mask & ~grown_component
-        if np.count_nonzero(surrounding_ring) < 4:
-            continue
-        component_depth_median = float(np.nanmedian(depth_arr[grown_component]))
-        ring_depth_median = float(np.nanmedian(depth_arr[surrounding_ring]))
-        component_sdi_median = float(np.nanmedian(sdi_arr[grown_component]))
-        ring_sdi_median = float(np.nanmedian(sdi_arr[surrounding_ring]))
         if (
-            not np.isfinite(component_depth_median) or not np.isfinite(ring_depth_median)
-            or not np.isfinite(component_sdi_median) or not np.isfinite(ring_sdi_median)
+            np.any(component_mask[0, :]) or np.any(component_mask[-1, :])
+            or np.any(component_mask[:, 0]) or np.any(component_mask[:, -1])
         ):
             continue
 
-        required_depth_contrast = max(0.15, 0.50 * depth_jump_threshold)
-        required_sdi_drop = max(0.03, 0.50 * sdi_drop_threshold)
-        if component_depth_median <= ring_depth_median:
+        belt_mask = (
+            ndimage.binary_dilation(component_mask, structure=structure)
+            & search_mask
+            & ~component_mask
+        )
+        if np.count_nonzero(belt_mask) == 0:
             continue
-        if (component_depth_median - ring_depth_median) < required_depth_contrast:
-            continue
-        if ring_depth_median > max(depth_min, 0.0) and component_depth_median < (ring_depth_median * 1.08):
-            continue
-        if component_sdi_median >= ring_sdi_median:
-            continue
-        if (ring_sdi_median - component_sdi_median) < required_sdi_drop:
+        if not np.all(steep_mask[belt_mask]):
             continue
 
-        suspicious_mask |= grown_component
+        outer_ring = (
+            ndimage.binary_dilation(belt_mask, structure=structure)
+            & search_mask
+            & ~belt_mask
+            & ~component_mask
+        )
+        if np.count_nonzero(outer_ring) == 0:
+            continue
+
+        component_depth_median = float(np.nanmedian(depth_arr[component_mask]))
+        outer_depth_median = float(np.nanmedian(depth_arr[outer_ring]))
+        if not np.isfinite(component_depth_median) or not np.isfinite(outer_depth_median):
+            continue
+        if component_depth_median <= outer_depth_median:
+            continue
+
+        suspicious_mask |= component_mask
+
+    if not np.any(suspicious_mask):
+        return result
+
+    if suspicious_modal_window and suspicious_modal_window > 1:
+        suspicious_mask = (
+            suspicious_mask
+            | _majority_filter(suspicious_mask, window_size=int(suspicious_modal_window))
+        ) & search_mask
+    suspicious_mask = np.asarray(ndimage.binary_fill_holes(suspicious_mask), dtype=bool) & search_mask
+    suspicious_mask = _remove_border_touching_components(suspicious_mask, structure=structure) & search_mask
 
     _component_labels, component_count = ndimage.label(suspicious_mask, structure=structure)
     result['suspicious_mask'] = suspicious_mask
@@ -2478,7 +2822,8 @@ def _write_geotiff(path, bands, transform, crs, height, width, nodata=-999.0):
 
 def _write_netcdf_from_chunks(chunk_manifest, ofile, dim_list, height, width, nbands,
                               lat, lon, wls, name_lat, name_lon, name_w, shape_geo, primary_var_defs,
-                              substrate_var_names, relaxed, fully_relaxed=False):
+                              substrate_var_names, relaxed,
+                              standardize_relaxed_substrate_outputs=False):
     nc_o = Dataset(ofile, 'w')
     nc_o.createDimension(dim_list[0], height)
     nc_o.createDimension(dim_list[1], width)
@@ -2510,7 +2855,12 @@ def _write_netcdf_from_chunks(chunk_manifest, ofile, dim_list, height, width, nb
     for chunk in chunk_manifest:
         row_start, row_end, chunk_arrays = _load_chunk_file(chunk['path'])
         row_slice = slice(row_start, row_end)
-        substrate_norm_map = _compute_chunk_substrate_norms(chunk_arrays, relaxed, substrate_var_names, fully_relaxed=fully_relaxed)
+        substrate_norm_map = _compute_chunk_substrate_norms(
+            chunk_arrays,
+            relaxed,
+            substrate_var_names,
+            standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
+        )
         for var_name, _ in primary_var_defs:
             data = chunk_arrays.get(var_name, substrate_norm_map.get(var_name))
             if data is None:
@@ -2521,7 +2871,8 @@ def _write_netcdf_from_chunks(chunk_manifest, ofile, dim_list, height, width, nb
 
 
 def _write_geotiff_from_chunks(chunk_manifest, tif_path, width, height, lat, lon, shape_geo,
-                               primary_var_defs, substrate_var_names, relaxed, fully_relaxed=False,
+                               primary_var_defs, substrate_var_names, relaxed,
+                               standardize_relaxed_substrate_outputs=False,
                                grid_metadata=None):
     transform, crs = _derive_transform_crs(width, height, lat, lon, shape_geo, grid_metadata)
     count = len(primary_var_defs)
@@ -2551,7 +2902,12 @@ def _write_geotiff_from_chunks(chunk_manifest, tif_path, width, height, lat, lon
             row_start, row_end, chunk_arrays = _load_chunk_file(chunk['path'])
             chunk_rows = row_end - row_start
             window = Window(0, row_start, width, chunk_rows)
-            substrate_norm_map = _compute_chunk_substrate_norms(chunk_arrays, relaxed, substrate_var_names, fully_relaxed=fully_relaxed)
+            substrate_norm_map = _compute_chunk_substrate_norms(
+                chunk_arrays,
+                relaxed,
+                substrate_var_names,
+                standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
+            )
             for band_idx, (var_name, _) in enumerate(primary_var_defs, start=1):
                 data = chunk_arrays.get(var_name, substrate_norm_map.get(var_name))
                 if data is None:
@@ -2559,13 +2915,20 @@ def _write_geotiff_from_chunks(chunk_manifest, tif_path, width, height, lat, lon
                 dst.write(ma.array(data).filled(OUTPUT_FILL_VALUE), band_idx, window=window)
 
 
-def _build_primary_outputs_from_chunk(chunk_arrays, primary_var_defs, substrate_var_names, relaxed, fully_relaxed=False):
+def _build_primary_outputs_from_chunk(chunk_arrays, primary_var_defs, substrate_var_names, relaxed,
+                                      standardize_relaxed_substrate_outputs=False):
     """Return list of (var_name, array, display_name) for a single chunk."""
     required_sub_keys = ('sub1_frac', 'sub2_frac', 'sub3_frac')
     if any(chunk_arrays.get(key) is None for key in required_sub_keys):
         return []
     chunk_like = {key: chunk_arrays.get(key) for key in required_sub_keys}
-    substrate_norm_map = _compute_chunk_substrate_norms(chunk_like, relaxed, substrate_var_names, fully_relaxed=fully_relaxed)
+    chunk_like['total_abun'] = chunk_arrays.get('total_abun')
+    substrate_norm_map = _compute_chunk_substrate_norms(
+        chunk_like,
+        relaxed,
+        substrate_var_names,
+        standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
+    )
     metric_arrays = {
         'chl': chunk_arrays.get('chl'),
         'cdom': chunk_arrays.get('cdom'),
@@ -2573,6 +2936,7 @@ def _build_primary_outputs_from_chunk(chunk_arrays, primary_var_defs, substrate_
         'depth': chunk_arrays.get('depth'),
         'kd': chunk_arrays.get('kd'),
         'sdi': chunk_arrays.get('sdi'),
+        'sum_of_substrats': substrate_norm_map.get('sum_of_substrats'),
         'error_f': chunk_arrays.get('error_f'),
         'r_sub': chunk_arrays.get('r_sub'),
     }
@@ -2629,7 +2993,8 @@ def _write_single_chunk_geotiff(path, primary_outputs, lat_slice, lon_slice, sha
 
 def _write_chunk_outputs(chunk_manifest, ofile, output_format, dim_list, width, nbands,
                          lat, lon, wls, name_lat, name_lon, name_w, shape_geo,
-                         primary_var_defs, substrate_var_names, relaxed, fully_relaxed=False, cleanup_paths=None,
+                         primary_var_defs, substrate_var_names, relaxed,
+                         standardize_relaxed_substrate_outputs=False, cleanup_paths=None,
                          grid_metadata=None):
     """Write per-chunk outputs matching the user-selected format."""
     if not chunk_manifest or not ofile:
@@ -2642,7 +3007,13 @@ def _write_chunk_outputs(chunk_manifest, ofile, output_format, dim_list, width, 
         chunk_suffix = f"_chunk{chunk_idx:04d}" if isinstance(chunk_idx, int) else f"_chunk_{row_start}_{row_end}"
         chunk_base = base + chunk_suffix
         row_count = row_end - row_start
-        primary_outputs = _build_primary_outputs_from_chunk(chunk_arrays, primary_var_defs, substrate_var_names, relaxed, fully_relaxed=fully_relaxed)
+        primary_outputs = _build_primary_outputs_from_chunk(
+            chunk_arrays,
+            primary_var_defs,
+            substrate_var_names,
+            relaxed,
+            standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
+        )
         if not primary_outputs:
             continue
         lat_slice = None
@@ -2778,7 +3149,8 @@ def _export_outputs_legacy(ofile, output_format, dim_list, height, width, nbands
 def _export_outputs_modern(ofile, output_format, chunk_manifest, dim_list, height, width, nbands,
                            lat_data, lon_data, wls, lat_name, lon_name, w_name,
                            shape_geo_val, primary_outputs, primary_var_defs,
-                           substrate_var_names, relaxed, fully_relaxed=False, grid_metadata=None):
+                           substrate_var_names, relaxed,
+                           standardize_relaxed_substrate_outputs=False, grid_metadata=None):
     if output_format in ("netcdf", "both"):
         if chunk_manifest:
             _write_netcdf_from_chunks(
@@ -2798,7 +3170,7 @@ def _export_outputs_modern(ofile, output_format, chunk_manifest, dim_list, heigh
                 primary_var_defs,
                 substrate_var_names,
                 relaxed,
-                fully_relaxed=fully_relaxed)
+                standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs)
         else:
             _write_direct_netcdf(
                 ofile,
@@ -2829,7 +3201,7 @@ def _export_outputs_modern(ofile, output_format, chunk_manifest, dim_list, heigh
                         primary_var_defs,
                         substrate_var_names,
                         relaxed,
-                        fully_relaxed=fully_relaxed,
+                        standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
                         grid_metadata=grid_metadata)
                 except Exception as e:
                     print(f"[ERROR]: Failed to write chunked GeoTIFF '{ofile}': {e}")
@@ -3367,7 +3739,9 @@ def _write_slope_geotiff(ofile, depth_data, width, height, lat_data, lon_data, s
 
 def _write_anomaly_search_debug_geotiffs(ofile, width, height, lat_data, lon_data, shape_geo_val, debug_layers,
                                          grid_metadata=None):
-    if lat_data is None or lon_data is None or not debug_layers:
+    if not debug_layers:
+        return
+    if (lat_data is None or lon_data is None) and not grid_metadata:
         return
     transform, crs = _derive_transform_crs(width, height, lat_data, lon_data, shape_geo_val, grid_metadata)
     base, _ = os.path.splitext(ofile)
@@ -3412,7 +3786,6 @@ if __name__ == "__main__":
         optimize_initial_guesses = False
         use_five_initial_guesses = False
         initial_guess_debug = False
-        fully_relaxed = False
         output_modeled_reflectance = False
         crop_selection = None
         deep_water_selection = None
@@ -3439,7 +3812,11 @@ if __name__ == "__main__":
             optimize_initial_guesses = _coerce_bool(root.get('optimize_initial_guesses', False))
             use_five_initial_guesses = _coerce_bool(root.get('use_five_initial_guesses', False))
             initial_guess_debug = _coerce_bool(root.get('initial_guess_debug', False))
-            fully_relaxed = _coerce_bool(root.get('fully_relaxed', False))
+            if _coerce_bool(root.get('fully_relaxed', False)) and not relaxed:
+                relaxed = True
+            standardize_relaxed_substrate_outputs = _coerce_bool(
+                root.get('standardize_relaxed_substrate_outputs', False)
+            )
             output_modeled_reflectance = _coerce_bool(root.get('output_modeled_reflectance', False))
             crop_selection = _parse_crop_selection(root)
             deep_water_selection = _parse_deep_water_selection(root)
@@ -3450,6 +3827,14 @@ if __name__ == "__main__":
                 'export_local_moran_raster': root.get('anomaly_search_export_local_moran_raster', False),
                 'export_suspicious_binary_raster': root.get('anomaly_search_export_suspicious_binary_raster', False),
                 'export_interpolated_rasters': root.get('anomaly_search_export_interpolated_rasters', False),
+                'seed_slope_threshold_percent': root.get(
+                    'anomaly_search_seed_slope_threshold_percent',
+                    None,
+                ),
+                'seed_slope_threshold_degrees': root.get(
+                    'anomaly_search_seed_slope_threshold_degrees',
+                    None,
+                ),
             }
 
 
@@ -3480,7 +3865,7 @@ if __name__ == "__main__":
                 print("[INFO]: GUI closed without running. Exiting.")
                 sys.exit(0)
             file_list, ofile, siop_xml_path, file_sensor, above_rrs_flag, reflectance_input_flag, relaxed, shallow_flag, \
-                optimize_initial_guesses, use_five_initial_guesses, initial_guess_debug, fully_relaxed, output_modeled_reflectance, anomaly_search_settings, pmin, pmax, xml_file, xml_dict, output_format, bathy_path, pp, allow_split, split_chunk_rows_str, *extra_gui_result = gui_result
+                optimize_initial_guesses, use_five_initial_guesses, initial_guess_debug, standardize_relaxed_substrate_outputs, output_modeled_reflectance, anomaly_search_settings, pmin, pmax, xml_file, xml_dict, output_format, bathy_path, pp, allow_split, split_chunk_rows_str, *extra_gui_result = gui_result
             gui_run_versions = extra_gui_result[0] if extra_gui_result else []
             split_chunk_rows = _parse_chunk_rows(split_chunk_rows_str)
             bathy_path = _resolve_bundled_resource(bathy_path)
@@ -3528,7 +3913,7 @@ if __name__ == "__main__":
                 'optimize_initial_guesses': optimize_initial_guesses,
                 'use_five_initial_guesses': use_five_initial_guesses,
                 'initial_guess_debug': initial_guess_debug,
-                'fully_relaxed': fully_relaxed,
+                'standardize_relaxed_substrate_outputs': standardize_relaxed_substrate_outputs,
                 'output_modeled_reflectance': output_modeled_reflectance,
                 'anomaly_search_settings': copy.deepcopy(anomaly_search_settings),
                 'xml_dict': copy.deepcopy(xml_dict) if 'xml_dict' in locals() else {},
@@ -3570,7 +3955,7 @@ if __name__ == "__main__":
                 default_optimize_initial_guesses=optimize_initial_guesses,
                 default_use_five_initial_guesses=use_five_initial_guesses,
                 default_initial_guess_debug=initial_guess_debug,
-                default_fully_relaxed=fully_relaxed,
+                default_standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
                 default_output_modeled_reflectance=output_modeled_reflectance,
                 default_anomaly_search_settings=anomaly_search_settings,
                 default_xml_dict=xml_dict if 'xml_dict' in locals() else {},
@@ -3633,7 +4018,7 @@ if __name__ == "__main__":
                     'rrs_flag': resolved_version['above_rrs_flag'],
                     'reflectance_input': resolved_version['reflectance_input_flag'],
                     'relaxed': resolved_version['relaxed'],
-                    'fully_relaxed': resolved_version['fully_relaxed'],
+                    'standardize_relaxed_substrate_outputs': resolved_version['standardize_relaxed_substrate_outputs'],
                     'shallow': resolved_version['shallow_flag'],
                     'optimize_initial_guesses': resolved_version['optimize_initial_guesses'],
                     'use_five_initial_guesses': resolved_version['use_five_initial_guesses'],
@@ -3675,7 +4060,13 @@ if __name__ == "__main__":
             optimize_initial_guesses = _coerce_bool(run_version.get('optimize_initial_guesses', optimize_initial_guesses), optimize_initial_guesses)
             use_five_initial_guesses = _coerce_bool(run_version.get('use_five_initial_guesses', use_five_initial_guesses), use_five_initial_guesses)
             initial_guess_debug = _coerce_bool(run_version.get('initial_guess_debug', initial_guess_debug), initial_guess_debug)
-            fully_relaxed = _coerce_bool(run_version.get('fully_relaxed', fully_relaxed), fully_relaxed)
+            standardize_relaxed_substrate_outputs = _coerce_bool(
+                run_version.get(
+                    'standardize_relaxed_substrate_outputs',
+                    standardize_relaxed_substrate_outputs,
+                ),
+                standardize_relaxed_substrate_outputs,
+            )
             output_modeled_reflectance = _coerce_bool(run_version.get('output_modeled_reflectance', output_modeled_reflectance), output_modeled_reflectance)
             bathy_path = run_version.get('bathy_path', bathy_path)
             anomaly_search_settings = copy.deepcopy(run_version.get('anomaly_search_settings', anomaly_search_settings))
@@ -4200,7 +4591,7 @@ if __name__ == "__main__":
                     print(f"[WARN]: Failed to estimate shallow-water substrate priors: {e}")
 
             deep_water_prior_stats = None
-            deep_water_csv_path = None
+            deep_water_iop_raster_path = None
             deep_water_mask = None
             deep_water_successful_estimates = []
             if deep_water_selection and deep_water_rrs_full is not None and deep_water_lat_full is not None and deep_water_lon_full is not None:
@@ -4214,7 +4605,11 @@ if __name__ == "__main__":
                     if deep_water_mask is not None and np.any(deep_water_mask):
                         deep_rows, deep_cols = np.where(deep_water_mask)
                         selected_pixel_count = int(deep_rows.size)
-                        if selected_pixel_count > _PRIOR_PIXEL_SAMPLE_LIMIT:
+                        subsample_deep_water_pixels = _coerce_bool(
+                            deep_water_selection.get('subsample_pixels', True),
+                            True,
+                        )
+                        if selected_pixel_count > _PRIOR_PIXEL_SAMPLE_LIMIT and subsample_deep_water_pixels:
                             rng = np.random.default_rng(42)
                             chosen_indices = np.sort(
                                 rng.choice(
@@ -4229,9 +4624,18 @@ if __name__ == "__main__":
                                 f"[INFO]: Deep-water polygons selected {selected_pixel_count} pixel(s); "
                                 f"randomly subsampling {_PRIOR_PIXEL_SAMPLE_LIMIT} pixels for deep-water analysis."
                             )
-                        chl_bounds = tuple(float(v) for v in siop['p_bounds'][0])
-                        cdom_bounds = tuple(float(v) for v in siop['p_bounds'][1])
-                        nap_bounds = tuple(float(v) for v in siop['p_bounds'][2])
+                        elif selected_pixel_count > _PRIOR_PIXEL_SAMPLE_LIMIT:
+                            print(
+                                f"[INFO]: Deep-water polygons selected {selected_pixel_count} pixel(s); "
+                                "analyzing all selected pixels because deep-water subsampling is disabled."
+                            )
+                        chl_bounds, cdom_bounds, nap_bounds = _DEEP_WATER_IOP_RELAXED_BOUNDS
+                        print(
+                            "[INFO]: Deep-water mode is using relaxed IOP bounds "
+                            f"CHL=[{chl_bounds[0]:g}, {chl_bounds[1]:g}], "
+                            f"CDOM=[{cdom_bounds[0]:g}, {cdom_bounds[1]:g}], "
+                            f"NAP=[{nap_bounds[0]:g}, {nap_bounds[1]:g}]."
+                        )
                         deep_water_pixel_rows = []
                         for row, col in zip(deep_rows.tolist(), deep_cols.tolist()):
                             observed_rrs = deep_water_rrs_full[:, int(row), int(col)]
@@ -4264,8 +4668,29 @@ if __name__ == "__main__":
                                 deep_water_successful_estimates,
                                 deep_water_selection.get('use_sd_bounds', False),
                             )
-                            deep_water_csv_path = os.path.splitext(ofile)[0] + '_deep_water_pixels.csv'
-                            _write_deep_water_pixel_csv(deep_water_csv_path, deep_water_pixel_rows)
+                            deep_water_iop_raster_path = os.path.splitext(ofile)[0] + '_deep_water_iop_estimates.tif'
+                            try:
+                                raster_info = _write_deep_water_iop_raster(
+                                    deep_water_iop_raster_path,
+                                    deep_water_pixel_rows,
+                                    int(deep_water_rrs_full.shape[2]),
+                                    int(deep_water_rrs_full.shape[1]),
+                                    deep_water_lat_full,
+                                    deep_water_lon_full,
+                                    2 if np.asarray(deep_water_lat_full).ndim == 2 else shape_geo,
+                                    deep_water_grid_metadata,
+                                )
+                                if raster_info is None:
+                                    deep_water_iop_raster_path = None
+                                else:
+                                    print(
+                                        "[INFO]: Wrote deep-water IOP raster with "
+                                        f"{raster_info['written_pixel_count']} successful pixel estimate(s): "
+                                        f"{deep_water_iop_raster_path}"
+                                    )
+                            except Exception as raster_exc:
+                                deep_water_iop_raster_path = None
+                                print(f"[WARN]: Failed to write deep-water IOP raster: {raster_exc}")
                             print(
                                 "[INFO]: Deep-water priors estimated from "
                                 f"{len(deep_water_successful_estimates)} selected pixel(s). "
@@ -4349,13 +4774,14 @@ if __name__ == "__main__":
             if not args.path and deep_water_prior_stats is not None:
                 xml_dict['deep_water_enabled'] = True
                 xml_dict['deep_water_use_sd_bounds'] = bool(deep_water_selection.get('use_sd_bounds', False))
+                xml_dict['deep_water_subsample_pixels'] = bool(deep_water_selection.get('subsample_pixels', True))
                 xml_dict['deep_water_selected_pixel_count'] = (
                     int(np.count_nonzero(deep_water_mask))
                     if deep_water_mask is not None
                     else 0
                 )
                 xml_dict['deep_water_success_pixel_count'] = int(len(deep_water_successful_estimates))
-                xml_dict['deep_water_csv_path'] = deep_water_csv_path or ''
+                xml_dict['deep_water_iop_raster_path'] = deep_water_iop_raster_path or ''
                 xml_dict['deep_water_chl_mean'] = deep_water_prior_stats['chl_mean']
                 xml_dict['deep_water_chl_sd'] = deep_water_prior_stats['chl_sd']
                 xml_dict['deep_water_cdom_mean'] = deep_water_prior_stats['cdom_mean']
@@ -4560,7 +4986,6 @@ if __name__ == "__main__":
                         optimize_initial_guesses=optimize_initial_guesses,
                         use_five_initial_guesses=use_five_initial_guesses,
                         initial_guess_debug=initial_guess_debug,
-                        fully_relaxed=fully_relaxed,
                         chunk_rows_override=split_chunk_rows,
                         chunk_dir=chunk_dir)
                 except Exception:
@@ -4588,8 +5013,7 @@ if __name__ == "__main__":
                     bathy_exposed_mask=bathy_exposed_mask,
                     optimize_initial_guesses=optimize_initial_guesses,
                     use_five_initial_guesses=use_five_initial_guesses,
-                    initial_guess_debug=initial_guess_debug,
-                    fully_relaxed=fully_relaxed)
+                    initial_guess_debug=initial_guess_debug)
 
             if model_outputs is not None:
                 (closed_rrs, chl, cdom, nap, depth, nit, kd,
@@ -4599,50 +5023,77 @@ if __name__ == "__main__":
                 initial_guess_stack = None
             anomaly_search_result = None
             anomaly_debug_layers = []
+            anomaly_debug_multiband_exports = []
             anomaly_interpolated_maps = {}
             anomaly_corrected_pixel_count = 0
             if anomaly_search_settings.get('enabled'):
                 depth_for_anomaly = depth if model_outputs is not None else _assemble_chunk_array(chunk_manifest, 'depth', height, width)
-                sdi_for_anomaly = sdi if model_outputs is not None else _assemble_chunk_array(chunk_manifest, 'sdi', height, width)
                 protected_mask = None
+                stable_deep_mask = _build_anomaly_search_deep_protection_mask(
+                    depth_for_anomaly,
+                    depth_min=float(pmin[3]),
+                )
+                if np.any(stable_deep_mask):
+                    protected_mask = np.asarray(stable_deep_mask, dtype=bool)
+                    print(
+                        "[INFO]: Slope/plateau anomaly search excluded "
+                        f"{int(np.count_nonzero(stable_deep_mask))} stable deep pixel(s) "
+                        "from suspicious-pixel correction."
+                    )
                 lat_for_anomaly = lat_array if lat_array is not None else image_info.get('lat_grid')
                 lon_for_anomaly = lon_array if lon_array is not None else image_info.get('lon_grid')
                 anomaly_grid_metadata = image_info.get('grid_metadata')
                 if deep_water_selection and lat_for_anomaly is not None and lon_for_anomaly is not None:
                     try:
-                        protected_mask = _rasterize_epsg4326_geometries(
+                        polygon_protected_mask = _rasterize_epsg4326_geometries(
                             deep_water_selection.get('polygons') or [],
                             lat_for_anomaly,
                             lon_for_anomaly,
                             anomaly_grid_metadata,
                         )
-                        if protected_mask is not None:
-                            protected_mask = np.asarray(protected_mask, dtype=bool)
+                        if polygon_protected_mask is not None:
+                            polygon_protected_mask = np.asarray(polygon_protected_mask, dtype=bool)
+                            protected_mask = (
+                                polygon_protected_mask
+                                if protected_mask is None
+                                else (protected_mask | polygon_protected_mask)
+                            )
                     except Exception as protection_exc:
-                        protected_mask = None
                         print(f"[WARN]: Failed to build deep-water protection mask for anomaly search: {protection_exc}")
                 elif deep_water_selection:
                     print("[WARN]: Deep-water polygons were provided, but anomaly-search protection could not be applied because scene coordinates are unavailable.")
 
                 anomaly_search_result = _detect_local_moran_anomaly_pixels(
                     depth_for_anomaly,
-                    sdi_for_anomaly,
                     depth_min=float(pmin[3]),
                     exposed_mask=bathy_exposed_mask,
                     protected_mask=protected_mask,
+                    lat_data=lat_for_anomaly,
+                    lon_data=lon_for_anomaly,
+                    shape_geo=shape_geo if shape_geo is not None else image_info.get('shape_geo', 2),
+                    grid_metadata=anomaly_grid_metadata,
+                    slope_threshold_percent=float(
+                        anomaly_search_settings.get(
+                            'seed_slope_threshold_percent',
+                            _ANOMALY_SLOPE_THRESHOLD_PERCENT,
+                        )
+                    ),
                 )
+                anomaly_search_result['true_deep_mask'] = np.asarray(stable_deep_mask, dtype=bool)
                 suspicious_pixel_count = int(anomaly_search_result.get('suspicious_pixel_count', 0))
                 suspicious_component_count = int(anomaly_search_result.get('component_count', 0))
                 if suspicious_pixel_count > 0:
                     print(
-                        "[INFO]: Edge/plateau anomaly search flagged "
+                        "[INFO]: Slope/plateau anomaly search flagged "
                         f"{suspicious_pixel_count} suspicious pixel(s) across "
                         f"{suspicious_component_count} patch(es)."
                     )
                 else:
-                    print("[INFO]: Edge/plateau anomaly search found no suspicious false-deep patches.")
+                    print("[INFO]: Slope/plateau anomaly search found no suspicious false-deep patches.")
                 suspicious_mask = np.asarray(anomaly_search_result.get('suspicious_mask', np.zeros((height, width), dtype=bool)), dtype=bool)
                 valid_mask = np.asarray(anomaly_search_result.get('valid_mask', np.zeros((height, width), dtype=bool)), dtype=bool)
+                exclusion_mask = np.asarray(anomaly_search_result.get('protected_mask', np.zeros((height, width), dtype=bool)), dtype=bool)
+                anomaly_search_result['confident_mask'] = np.asarray(valid_mask & ~exclusion_mask & ~suspicious_mask, dtype=bool)
                 if np.any(suspicious_mask):
                     correction_recorder = _build_result_recorder_from_outputs(
                         height,
@@ -4654,7 +5105,9 @@ if __name__ == "__main__":
                         chunk_manifest=chunk_manifest,
                         initial_guess_stack=initial_guess_stack,
                     )
-                    anchor_mask = valid_mask & ~suspicious_mask
+                    _suspicious_buffered = ndimage.binary_dilation(suspicious_mask, structure=np.ones((3, 3), dtype=bool))
+                    anchor_mask = valid_mask & ~_suspicious_buffered & ~exclusion_mask
+                    anomaly_search_result['confident_mask'] = np.asarray(anchor_mask, dtype=bool)
                     anomaly_interpolated_maps = _interpolate_suspicious_parameter_maps(
                         {
                             'depth': correction_recorder.depth,
@@ -4679,7 +5132,6 @@ if __name__ == "__main__":
                                 siop,
                                 opt_met,
                                 relaxed,
-                                fully_relaxed=fully_relaxed,
                                 free_cpu=args.free_cpu,
                                 bathy_tolerance=0.0,
                                 optimize_initial_guesses=False,
@@ -4703,7 +5155,6 @@ if __name__ == "__main__":
                                 apply_shallow_adjustment=False,
                                 allow_target_sum_over_one=False,
                                 normalise_target_fractions=False,
-                                fully_relaxed=fully_relaxed,
                                 executor=rerun_executor,
                             )
                         finally:
@@ -4742,7 +5193,11 @@ if __name__ == "__main__":
                 ('kd', 'kd'),
                 ('sdi', 'sdi'),
             ]
-            tail_metric_defs = [('error_f', 'error_f'), ('r_sub', 'r_sub')]
+            tail_metric_defs = [
+                ('sum_of_substrats', 'sum_of substrats'),
+                ('error_f', 'error_f'),
+                ('r_sub', 'r_sub'),
+            ]
             primary_var_defs = base_metric_defs + substrate_defs + tail_metric_defs
 
             primary_outputs = None
@@ -4751,8 +5206,14 @@ if __name__ == "__main__":
                     'sub1_frac': sub1_frac,
                     'sub2_frac': sub2_frac,
                     'sub3_frac': sub3_frac,
+                    'total_abun': total_abun,
                 }
-                substrate_norm_map = _compute_chunk_substrate_norms(chunk_like, relaxed, substrate_var_names, fully_relaxed=fully_relaxed)
+                substrate_norm_map = _compute_chunk_substrate_norms(
+                    chunk_like,
+                    relaxed,
+                    substrate_var_names,
+                    standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
+                )
                 metric_arrays = {
                     'chl': chl,
                     'cdom': cdom,
@@ -4760,6 +5221,7 @@ if __name__ == "__main__":
                     'depth': depth,
                     'kd': kd,
                     'sdi': sdi,
+                    'sum_of_substrats': substrate_norm_map.get('sum_of_substrats'),
                     'error_f': error_f,
                     'r_sub': r_sub,
                 }
@@ -4774,12 +5236,21 @@ if __name__ == "__main__":
             # Write per-run XML log next to outputs (GUI mode only)
             if not args.path:
                 try:
+                    xml_dict['standardize_relaxed_substrate_outputs'] = bool(
+                        standardize_relaxed_substrate_outputs
+                    )
                     xml_dict['anomaly_search_enabled'] = anomaly_search_settings.get('enabled', False)
                     xml_dict['anomaly_search_export_local_moran_raster'] = anomaly_search_settings.get('export_local_moran_raster', False)
                     xml_dict['anomaly_search_export_suspicious_binary_raster'] = anomaly_search_settings.get('export_suspicious_binary_raster', False)
                     xml_dict['anomaly_search_export_interpolated_rasters'] = anomaly_search_settings.get('export_interpolated_rasters', False)
+                    xml_dict['anomaly_search_seed_slope_threshold_percent'] = float(
+                        anomaly_search_settings.get(
+                            'seed_slope_threshold_percent',
+                            DEFAULT_ANOMALY_SEARCH_SETTINGS['seed_slope_threshold_percent'],
+                        )
+                    )
                     if anomaly_search_result is not None:
-                        xml_dict['anomaly_search_method'] = 'edge_plateau_depth_sdi'
+                        xml_dict['anomaly_search_method'] = 'slope_plateau_depth_only'
                         xml_dict['anomaly_search_suspicious_pixel_count'] = int(anomaly_search_result.get('suspicious_pixel_count', 0))
                         xml_dict['anomaly_search_component_count'] = int(anomaly_search_result.get('component_count', 0))
                         xml_dict['anomaly_search_rerun_pixel_count'] = int(anomaly_corrected_pixel_count)
@@ -4807,20 +5278,20 @@ if __name__ == "__main__":
             grid_metadata = image_info.get('grid_metadata')
             if anomaly_search_result is not None:
                 valid_mask = np.asarray(anomaly_search_result.get('valid_mask', np.zeros((height, width), dtype=bool)), dtype=bool)
-                depth_jump_layer = anomaly_search_result.get('depth_jump')
-                sdi_drop_layer = anomaly_search_result.get('sdi_drop')
+                slope_layer = anomaly_search_result.get('slope_percent')
                 seed_mask = np.asarray(anomaly_search_result.get('seed_mask', np.zeros((height, width), dtype=bool)), dtype=bool)
-                if anomaly_search_settings.get('export_local_moran_raster') and depth_jump_layer is not None:
+                true_deep_mask = np.asarray(anomaly_search_result.get('true_deep_mask', np.zeros((height, width), dtype=bool)), dtype=bool)
+                confident_mask = np.asarray(anomaly_search_result.get('confident_mask', np.zeros((height, width), dtype=bool)), dtype=bool)
+                if anomaly_search_settings.get('export_local_moran_raster') and slope_layer is not None:
                     anomaly_debug_layers.append(
-                        ('_anomaly_search_depth_jump.tif', 'depth_jump', depth_jump_layer)
-                    )
-                if anomaly_search_settings.get('export_local_moran_raster') and sdi_drop_layer is not None:
-                    anomaly_debug_layers.append(
-                        ('_anomaly_search_sdi_drop.tif', 'sdi_drop', sdi_drop_layer)
+                        ('_anomaly_search_slope_percent.tif', 'slope_percent', slope_layer)
                     )
                 if anomaly_search_settings.get('export_local_moran_raster'):
                     anomaly_debug_layers.append(
-                        ('_anomaly_search_edge_seed_mask.tif', 'edge_seed_mask', ma.masked_array(seed_mask.astype('float32'), mask=~valid_mask))
+                        ('_truedeepmask.tif', 'true_deep_mask', ma.masked_array(true_deep_mask.astype('float32'), mask=~valid_mask))
+                    )
+                    anomaly_debug_layers.append(
+                        ('_anomaly_search_seed_mask.tif', 'seed_mask', ma.masked_array(seed_mask.astype('float32'), mask=~valid_mask))
                     )
                 if anomaly_search_settings.get('export_suspicious_binary_raster'):
                     suspicious_mask = np.asarray(anomaly_search_result.get('suspicious_mask', np.zeros((height, width), dtype=bool)), dtype=bool)
@@ -4831,18 +5302,23 @@ if __name__ == "__main__":
                     anomaly_debug_layers.append(
                         ('_anomaly_search_suspicious_mask.tif', 'suspicious_mask', suspicious_layer)
                     )
+                    confident_layer = ma.masked_array(
+                        confident_mask.astype('float32'),
+                        mask=~valid_mask,
+                    )
+                    anomaly_debug_layers.append(
+                        ('_anomaly_search_confident_mask.tif', 'confident_mask', confident_layer)
+                    )
                 if anomaly_search_settings.get('export_interpolated_rasters') and anomaly_interpolated_maps:
-                    for key, suffix in (
-                        ('depth', '_anomaly_search_interpolated_depth.tif'),
-                        ('chl', '_anomaly_search_interpolated_chl.tif'),
-                        ('cdom', '_anomaly_search_interpolated_cdom.tif'),
-                        ('nap', '_anomaly_search_interpolated_nap.tif'),
-                    ):
+                    interpolated_bands = []
+                    for key in ('depth', 'chl', 'cdom', 'nap'):
                         layer = anomaly_interpolated_maps.get(key)
                         if layer is not None:
-                            anomaly_debug_layers.append(
-                                (suffix, f'interpolated_{key}', layer)
-                            )
+                            interpolated_bands.append((f'interpolated_{key}', layer))
+                    if interpolated_bands:
+                        anomaly_debug_multiband_exports.append(
+                            ('_anomaly_search_interpolated_values.tif', interpolated_bands)
+                        )
 
             if chunk_manifest and not legacy_mode:
                     _write_chunk_outputs(
@@ -4862,7 +5338,7 @@ if __name__ == "__main__":
                         primary_var_defs,
                         substrate_var_names,
                         relaxed,
-                        fully_relaxed=fully_relaxed,
+                        standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
                         cleanup_paths=chunk_export_paths,
                         grid_metadata=grid_metadata)
 
@@ -4903,7 +5379,7 @@ if __name__ == "__main__":
                     primary_var_defs,
                     substrate_var_names,
                     relaxed,
-                    fully_relaxed=fully_relaxed,
+                    standardize_relaxed_substrate_outputs=standardize_relaxed_substrate_outputs,
                     grid_metadata=grid_metadata)
 
             if anomaly_debug_layers:
@@ -4920,6 +5396,29 @@ if __name__ == "__main__":
                     )
                 except Exception as e:
                     print(f"[WARN]: Failed to write anomaly-search debug GeoTIFFs '{ofile}': {e}")
+            if anomaly_debug_multiband_exports:
+                try:
+                    transform, crs = _derive_transform_crs(
+                        width,
+                        height,
+                        lat_data,
+                        lon_data,
+                        shape_geo_val,
+                        grid_metadata,
+                    )
+                    base, _ = os.path.splitext(ofile)
+                    for suffix, bands in anomaly_debug_multiband_exports:
+                        _write_geotiff(
+                            base + suffix,
+                            bands,
+                            transform,
+                            crs,
+                            height,
+                            width,
+                            nodata=OUTPUT_FILL_VALUE,
+                        )
+                except Exception as e:
+                    print(f"[WARN]: Failed to write anomaly-search interpolated GeoTIFFs '{ofile}': {e}")
 
             if initial_guess_debug:
                 if chunk_manifest:

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
+import types
 
 import numpy as np
 import numpy.ma as ma
@@ -15,6 +16,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(APP_DIR))
 
 import launch_swampy as swampy
+import leaflet_crop_window
 
 
 def test_normalise_anomaly_search_settings_uses_defaults():
@@ -29,6 +31,7 @@ def test_normalise_anomaly_search_settings_coerces_bool_values():
         "enabled": "true",
         "export_local_moran_raster": 1,
         "export_suspicious_binary_raster": "0",
+        "seed_slope_threshold_percent": "12.5",
     })
 
     assert settings == {
@@ -36,6 +39,7 @@ def test_normalise_anomaly_search_settings_coerces_bool_values():
         "export_local_moran_raster": True,
         "export_suspicious_binary_raster": False,
         "export_interpolated_rasters": False,
+        "seed_slope_threshold_percent": 12.5,
     }
 
 
@@ -63,7 +67,108 @@ def test_finalise_anomaly_search_settings_disables_with_input_bathymetry():
         "export_local_moran_raster": True,
         "export_suspicious_binary_raster": True,
         "export_interpolated_rasters": False,
+        "seed_slope_threshold_percent": 10.0,
     }
+
+
+def test_finalise_anomaly_search_settings_restores_default_threshold_when_invalid():
+    settings = swampy._finalise_anomaly_search_settings({
+        "enabled": True,
+        "seed_slope_threshold_percent": "0",
+    })
+
+    assert settings["enabled"] is True
+    assert settings["seed_slope_threshold_percent"] == pytest.approx(10.0)
+
+
+def test_normalise_anomaly_search_settings_converts_legacy_degree_threshold_to_percent():
+    settings = swampy._normalise_anomaly_search_settings({
+        "seed_slope_threshold_degrees": "45",
+    })
+
+    assert settings["seed_slope_threshold_percent"] == pytest.approx(100.0)
+
+
+def test_compute_chunk_substrate_norms_exports_raw_relaxed_substrates_by_default():
+    chunk_arrays = {
+        "sub1_frac": ma.array([[0.8]], dtype="float32"),
+        "sub2_frac": ma.array([[0.7]], dtype="float32"),
+        "sub3_frac": ma.array([[0.0]], dtype="float32"),
+        "total_abun": ma.array([[1.5]], dtype="float32"),
+    }
+
+    outputs = swampy._compute_chunk_substrate_norms(
+        chunk_arrays,
+        relaxed=True,
+        substrate_var_names=("sand", "mud", "unused"),
+    )
+
+    assert outputs["sand"][0, 0] == pytest.approx(0.8)
+    assert outputs["mud"][0, 0] == pytest.approx(0.7)
+    assert outputs["unused"][0, 0] == pytest.approx(0.0)
+    assert outputs["sum_of_substrats"][0, 0] == pytest.approx(1.5)
+
+
+def test_compute_chunk_substrate_norms_standardizes_relaxed_substrates_only_when_requested():
+    chunk_arrays = {
+        "sub1_frac": ma.array([[0.8]], dtype="float32"),
+        "sub2_frac": ma.array([[0.7]], dtype="float32"),
+        "sub3_frac": ma.array([[0.0]], dtype="float32"),
+        "total_abun": ma.array([[1.5]], dtype="float32"),
+    }
+
+    outputs = swampy._compute_chunk_substrate_norms(
+        chunk_arrays,
+        relaxed=True,
+        substrate_var_names=("sand", "mud", "unused"),
+        standardize_relaxed_substrate_outputs=True,
+    )
+
+    assert outputs["sand"][0, 0] == pytest.approx(0.8 / 1.5)
+    assert outputs["mud"][0, 0] == pytest.approx(0.7 / 1.5)
+    assert outputs["unused"][0, 0] == pytest.approx(0.0)
+    assert outputs["sum_of_substrats"][0, 0] == pytest.approx(1.5)
+
+
+def test_compute_chunk_substrate_norms_keeps_sum_of_substrats_fixed_to_one_in_strict_mode():
+    mask = np.array([[False, True]])
+    chunk_arrays = {
+        "sub1_frac": ma.masked_array([[0.25, 0.0]], mask=mask, dtype="float32"),
+        "sub2_frac": ma.masked_array([[0.75, 0.0]], mask=mask, dtype="float32"),
+        "sub3_frac": ma.masked_array([[0.0, 0.0]], mask=mask, dtype="float32"),
+        "total_abun": ma.masked_array([[1.0, 0.0]], mask=mask, dtype="float32"),
+    }
+
+    outputs = swampy._compute_chunk_substrate_norms(
+        chunk_arrays,
+        relaxed=False,
+        substrate_var_names=("sand", "mud", "unused"),
+    )
+
+    assert outputs["sum_of_substrats"][0, 0] == pytest.approx(1.0)
+    assert outputs["sum_of_substrats"].mask[0, 1]
+
+
+def test_build_primary_outputs_from_chunk_includes_sum_of_substrats_band():
+    chunk_arrays = {
+        "chl": ma.array([[0.5]], dtype="float32"),
+        "sub1_frac": ma.array([[0.8]], dtype="float32"),
+        "sub2_frac": ma.array([[0.7]], dtype="float32"),
+        "sub3_frac": ma.array([[0.0]], dtype="float32"),
+        "total_abun": ma.array([[1.5]], dtype="float32"),
+    }
+
+    outputs = swampy._build_primary_outputs_from_chunk(
+        chunk_arrays,
+        primary_var_defs=[("sum_of_substrats", "sum_of substrats")],
+        substrate_var_names=("sand", "mud", "unused"),
+        relaxed=True,
+    )
+
+    assert len(outputs) == 1
+    assert outputs[0][0] == "sum_of_substrats"
+    assert outputs[0][2] == "sum_of substrats"
+    assert outputs[0][1][0, 0] == pytest.approx(1.5)
 
 
 def test_build_batch_run_settings_csv_only_keeps_varying_columns():
@@ -94,7 +199,6 @@ def test_build_batch_run_settings_csv_only_keeps_varying_columns():
             "rrs_flag": True,
             "reflectance_input": False,
             "relaxed": False,
-            "fully_relaxed": False,
             "shallow": False,
             "optimize_initial_guesses": False,
             "use_five_initial_guesses": False,
@@ -135,7 +239,6 @@ def test_build_batch_run_settings_csv_only_keeps_varying_columns():
             "rrs_flag": True,
             "reflectance_input": False,
             "relaxed": False,
-            "fully_relaxed": False,
             "shallow": False,
             "optimize_initial_guesses": False,
             "use_five_initial_guesses": False,
@@ -236,6 +339,90 @@ def test_gui_default_water_column_bounds_match_paper_defaults():
     assert 'nap_max_var = StringVar(value="3.3")' in gui_source
 
 
+def test_deep_water_popup_html_contains_subsampling_checkbox_in_toolbar():
+    html = leaflet_crop_window._build_html({
+        "mode": "polygons",
+        "title": "Deep-water polygons",
+        "subtitle": "Preview",
+        "lat_min": 0.0,
+        "lat_max": 1.0,
+        "lon_min": 0.0,
+        "lon_max": 1.0,
+        "image_data_url": "data:,",
+        "allow_polygon": True,
+        "selection": {
+            "polygons": [],
+            "subsample_pixels": True,
+        },
+        "option_checkboxes": [
+            {
+                "id": "subsample_pixels",
+                "label": "Subsample selected pixels when many polygons overlap large deep-water areas",
+                "hint": "Keeps deep-water prior estimation faster on large selections.",
+                "value": True,
+                "summary_when_true": "subsampling enabled",
+                "summary_when_false": "all selected pixels retained",
+            }
+        ],
+    })
+
+    assert '<div id="toolbar-options"></div>' in html
+    assert 'Subsample selected pixels when many polygons overlap large deep-water areas' in html
+    assert "document.getElementById('toolbar-options')" in html
+
+
+def test_deep_water_mode_uses_relaxed_iop_bounds():
+    assert swampy._DEEP_WATER_IOP_RELAXED_BOUNDS == (
+        (0.0, 10.0),
+        (0.0, 1.0),
+        (0.0, 8.0),
+    )
+
+
+def test_apply_deep_water_priors_uses_relaxed_bounds_instead_of_scene_bounds():
+    siop = {
+        "p_min": swampy.sb.FreeParameters(0.4, 0.04, 1.0, 0.1, 0.0, 0.0, 0.0),
+        "p_max": swampy.sb.FreeParameters(1.0, 0.11, 3.3, 30.0, 1.0, 1.0, 1.0),
+    }
+    siop["p_bounds"] = tuple(zip(siop["p_min"], siop["p_max"]))
+
+    stats = swampy._apply_deep_water_priors(
+        siop,
+        [
+            {"chl": 5.5, "cdom": 0.60, "nap": 6.5},
+            {"chl": 5.7, "cdom": 0.70, "nap": 6.7},
+        ],
+        use_sd_bounds=False,
+    )
+
+    assert stats["applied_pmin"] == pytest.approx([5.6, 0.65, 6.6])
+    assert stats["applied_pmax"] == pytest.approx([5.6, 0.65, 6.6])
+    assert list(siop["p_min"][:3]) == pytest.approx([5.6, 0.65, 6.6])
+    assert list(siop["p_max"][:3]) == pytest.approx([5.6, 0.65, 6.6])
+
+
+def test_apply_deep_water_priors_clips_sd_bounds_to_relaxed_limits():
+    siop = {
+        "p_min": swampy.sb.FreeParameters(0.4, 0.04, 1.0, 0.1, 0.0, 0.0, 0.0),
+        "p_max": swampy.sb.FreeParameters(1.0, 0.11, 3.3, 30.0, 1.0, 1.0, 1.0),
+    }
+    siop["p_bounds"] = tuple(zip(siop["p_min"], siop["p_max"]))
+
+    stats = swampy._apply_deep_water_priors(
+        siop,
+        [
+            {"chl": 9.0, "cdom": 0.80, "nap": 7.5},
+            {"chl": 10.0, "cdom": 1.00, "nap": 8.0},
+        ],
+        use_sd_bounds=True,
+    )
+
+    assert stats["applied_pmin"] == pytest.approx([9.0, 0.8, 7.5])
+    assert stats["applied_pmax"] == pytest.approx([10.0, 1.0, 8.0])
+    assert list(siop["p_min"][:3]) == pytest.approx([9.0, 0.8, 7.5])
+    assert list(siop["p_max"][:3]) == pytest.approx([10.0, 1.0, 8.0])
+
+
 def test_parse_crop_selection_preserves_point_buffer():
     selection = swampy._parse_crop_selection({
         "crop_enabled": True,
@@ -281,6 +468,86 @@ def test_parse_shallow_substrate_prior_selection_preserves_target_and_polygons()
     }
 
 
+def test_parse_deep_water_selection_preserves_subsample_choice():
+    polygon = {
+        "type": "Polygon",
+        "coordinates": [[[1.0, 2.0], [2.0, 2.0], [2.0, 3.0], [1.0, 2.0]]],
+    }
+
+    selection = swampy._parse_deep_water_selection({
+        "deep_water_enabled": True,
+        "deep_water_use_sd_bounds": True,
+        "deep_water_subsample_pixels": False,
+        "deep_water_polygons_json": json.dumps([polygon]),
+        "deep_water_source_image": "scene.nc",
+    })
+
+    assert selection == {
+        "polygons": [polygon],
+        "use_sd_bounds": True,
+        "subsample_pixels": False,
+        "source_image": "scene.nc",
+    }
+
+
+def test_parse_deep_water_selection_defaults_subsample_to_true_for_legacy_logs():
+    polygon = {
+        "type": "Polygon",
+        "coordinates": [[[1.0, 2.0], [2.0, 2.0], [2.0, 3.0], [1.0, 2.0]]],
+    }
+
+    selection = swampy._parse_deep_water_selection({
+        "deep_water_enabled": True,
+        "deep_water_polygons_json": json.dumps([polygon]),
+    })
+
+    assert selection["subsample_pixels"] is True
+
+
+def test_write_deep_water_iop_raster_writes_successful_estimates(tmp_path):
+    rasterio = pytest.importorskip("rasterio")
+    output_path = tmp_path / "deep_water_iops.tif"
+    lat = np.array([[10.0, 10.0], [9.0, 9.0]], dtype="float32")
+    lon = np.array([[1.0, 2.0], [1.0, 2.0]], dtype="float32")
+    pixel_rows = [
+        {
+            "row": 0,
+            "col": 1,
+            "chl": 1.25,
+            "cdom": 0.12,
+            "nap": 0.34,
+            "success": 1,
+        },
+        {
+            "row": 1,
+            "col": 0,
+            "chl": 9.0,
+            "cdom": 9.0,
+            "nap": 9.0,
+            "success": 0,
+        },
+    ]
+
+    info = swampy._write_deep_water_iop_raster(str(output_path), pixel_rows, 2, 2, lat, lon, 2)
+
+    assert info == {
+        "path": str(output_path),
+        "written_pixel_count": 1,
+    }
+    with rasterio.open(output_path) as dataset:
+        assert dataset.count == 3
+        assert dataset.descriptions == ("CHL", "CDOM", "NAP")
+        assert dataset.nodata == pytest.approx(float(swampy.OUTPUT_FILL_VALUE))
+        chl = dataset.read(1)
+        cdom = dataset.read(2)
+        nap = dataset.read(3)
+
+    assert chl[0, 1] == pytest.approx(1.25)
+    assert cdom[0, 1] == pytest.approx(0.12)
+    assert nap[0, 1] == pytest.approx(0.34)
+    assert chl[1, 0] == pytest.approx(float(swampy.OUTPUT_FILL_VALUE))
+
+
 def test_resolve_execution_version_settings_prefers_shallow_priors_over_deep_water():
     polygon = {
         "type": "Polygon",
@@ -308,7 +575,7 @@ def test_resolve_execution_version_settings_prefers_shallow_priors_over_deep_wat
         default_optimize_initial_guesses=False,
         default_use_five_initial_guesses=False,
         default_initial_guess_debug=False,
-        default_fully_relaxed=False,
+        default_standardize_relaxed_substrate_outputs=False,
         default_output_modeled_reflectance=False,
         default_anomaly_search_settings=swampy.DEFAULT_ANOMALY_SEARCH_SETTINGS,
         default_xml_dict={},
@@ -338,6 +605,7 @@ def test_anomaly_search_persistence_keys_replace_false_deep_keys():
         assert "anomaly_search_export_local_moran_raster" in source
         assert "anomaly_search_export_suspicious_binary_raster" in source
         assert "anomaly_search_export_interpolated_rasters" in source
+        assert "anomaly_search_seed_slope_threshold_percent" in source
         assert "false_deep_" not in source
 
 
@@ -363,80 +631,212 @@ def test_interpolate_suspicious_parameter_maps_uses_non_suspicious_values():
     assert np.isclose(float(interpolated["nap"][1, 1]), 0.1, atol=1.0e-6)
 
 
-def test_local_moran_detection_flags_enclosed_deep_patch_and_fills_hole():
-    depth = ma.array(np.full((7, 7), 2.0, dtype="float32"))
-    depth[2:5, 2:5] = 8.0
-    depth[3, 3] = 2.5
-    sdi = ma.array(np.full((7, 7), 2.0, dtype="float32"))
-    sdi[2:5, 2:5] = 0.4
-    sdi[3, 3] = 0.7
+def test_local_moran_detection_flags_enclosed_deep_plateau():
+    depth = ma.array(np.full((9, 9), 2.0, dtype="float32"))
+    depth[3:6, 3:6] = 8.0
 
-    result = swampy._detect_local_moran_anomaly_pixels(depth, sdi, depth_min=0.1)
+    result = swampy._detect_local_moran_anomaly_pixels(
+        depth,
+        depth_min=0.1,
+        dx_m=10.0,
+        dy_m=10.0,
+    )
 
     assert np.any(result["seed_mask"])
+    assert np.isfinite(float(result["slope_percent"][3, 3]))
     assert result["component_count"] == 1
-    assert result["suspicious_pixel_count"] == 9
-    assert result["suspicious_mask"][3, 3]
-    assert np.all(result["suspicious_mask"][2:5, 2:5])
-    assert np.isfinite(float(result["depth_jump"][2, 2]))
-    assert np.isfinite(float(result["sdi_drop"][2, 2]))
+    assert result["suspicious_pixel_count"] >= 9
+    assert np.all(result["suspicious_mask"][3:6, 3:6])
 
 
-def test_local_moran_detection_rejects_border_connected_open_deep_water():
-    depth = ma.array(np.full((7, 7), 2.0, dtype="float32"))
+def test_local_moran_detection_rejects_border_touching_plateau():
+    depth = ma.array(np.full((9, 9), 2.0, dtype="float32"))
     depth[:, :3] = 8.0
-    sdi = ma.array(np.full((7, 7), 2.0, dtype="float32"))
-    sdi[:, :3] = 0.4
 
-    result = swampy._detect_local_moran_anomaly_pixels(depth, sdi, depth_min=0.1)
+    result = swampy._detect_local_moran_anomaly_pixels(
+        depth,
+        depth_min=0.1,
+        dx_m=10.0,
+        dy_m=10.0,
+    )
 
+    assert np.any(result["seed_mask"][:, :4])
+    assert result["component_count"] == 0
+    assert result["suspicious_pixel_count"] == 0
+    assert not np.any(result["suspicious_mask"][:, :3])
+
+
+def test_local_moran_detection_marks_steep_pixels_directly_as_suspicious():
+    depth = ma.array(np.full((9, 9), 2.0, dtype="float32"))
+    depth[3:6, 3:6] = 8.0
+    depth[4, 4] = 12.0
+
+    result = swampy._detect_local_moran_anomaly_pixels(
+        depth,
+        depth_min=0.1,
+        dx_m=10.0,
+        dy_m=10.0,
+    )
+
+    assert result["component_count"] == 1
+    assert result["suspicious_mask"][4, 4]
+
+
+def test_local_moran_detection_marks_enclosed_low_slope_patch_when_deeper_than_outside():
+    depth = ma.array(np.full((9, 9), 2.0, dtype="float32"))
+    depth[3:6, 3:6] = 8.0
+    depth[4, 4] = 7.5
+
+    result = swampy._detect_local_moran_anomaly_pixels(
+        depth,
+        depth_min=0.1,
+        dx_m=10.0,
+        dy_m=10.0,
+    )
+
+    assert result["component_count"] == 1
+    assert result["suspicious_mask"][4, 4]
+
+
+def test_local_moran_detection_ignores_low_slope_patch_without_closed_steep_belt():
+    depth = ma.array(np.full((11, 11), 2.0, dtype="float32"))
+    depth[3:8, 3:8] = 8.0
+    depth[4:7, 4:7] = 7.5
+    depth[5, 7] = 6.5
+    depth[5, 8] = 5.0
+    depth[5, 9] = 3.5
+
+    result = swampy._detect_local_moran_anomaly_pixels(
+        depth,
+        depth_min=0.1,
+        dx_m=10.0,
+        dy_m=10.0,
+    )
+
+    assert result["component_count"] == 0
+    assert not result["suspicious_mask"][5, 5]
+    assert not result["suspicious_mask"][5, 7]
+
+
+def test_local_moran_detection_requires_steep_slope_seed():
+    depth = ma.array(np.tile(np.linspace(2.0, 3.0, 9, dtype="float32"), (9, 1)))
+
+    result = swampy._detect_local_moran_anomaly_pixels(
+        depth,
+        depth_min=0.1,
+        dx_m=10.0,
+        dy_m=10.0,
+    )
+
+    assert not np.any(result["seed_mask"])
     assert result["component_count"] == 0
     assert result["suspicious_pixel_count"] == 0
     assert not np.any(result["suspicious_mask"])
 
 
-def test_local_moran_detection_requires_low_sdi_as_well_as_high_depth():
-    depth = ma.array(np.full((7, 7), 2.0, dtype="float32"))
-    depth[2:5, 2:5] = 8.0
-    sdi = ma.array(np.full((7, 7), 2.0, dtype="float32"))
-    sdi[2:5, 2:5] = 2.1
+def test_local_moran_detection_keeps_depth_equal_to_min_bound_in_analysis():
+    depth = ma.array(np.full((7, 7), 0.1, dtype="float32"))
+    depth[2:5, 2:5] = 1.0
 
-    result = swampy._detect_local_moran_anomaly_pixels(depth, sdi, depth_min=0.1)
+    result = swampy._detect_local_moran_anomaly_pixels(
+        depth,
+        depth_min=1.0,
+        dx_m=1.0,
+        dy_m=1.0,
+    )
 
-    assert result["component_count"] == 0
-    assert result["suspicious_pixel_count"] == 0
-    assert not np.any(result["suspicious_mask"])
+    assert np.any(result["seed_mask"])
+    assert np.all(result["valid_mask"][2:5, 2:5])
+    assert np.any(result["suspicious_mask"][2:5, 2:5])
 
 
-def test_local_moran_detection_excludes_pixels_with_sdi_above_20():
-    depth = ma.array(np.full((7, 7), 2.0, dtype="float32"))
-    depth[2:5, 2:5] = 8.0
-    sdi = ma.array(np.full((7, 7), 2.0, dtype="float32"))
-    sdi[2:5, 2:5] = 25.0
+def test_local_moran_detection_uses_projected_grid_spacing_when_dx_dy_missing():
+    depth = ma.array(np.full((9, 9), 2.0, dtype="float32"))
+    depth[3:6, 3:6] = 8.0
 
-    result = swampy._detect_local_moran_anomaly_pixels(depth, sdi, depth_min=0.1)
+    result = swampy._detect_local_moran_anomaly_pixels(
+        depth,
+        grid_metadata={
+            "transform": swampy.Affine.translation(500000.0, 5400000.0) * swampy.Affine.scale(10.0, -10.0),
+            "crs": types.SimpleNamespace(is_projected=True),
+        },
+    )
 
-    assert not np.any(result["valid_mask"][2:5, 2:5])
-    assert result["component_count"] == 0
-    assert result["suspicious_pixel_count"] == 0
-    assert not np.any(result["suspicious_mask"])
+    assert result["component_count"] == 1
+    assert result["suspicious_pixel_count"] >= 9
+    assert np.any(result["seed_mask"])
 
 
 def test_local_moran_detection_respects_protected_mask():
     depth = ma.array(np.full((7, 7), 2.0, dtype="float32"))
     depth[2:5, 2:5] = 8.0
-    sdi = ma.array(np.full((7, 7), 2.0, dtype="float32"))
-    sdi[2:5, 2:5] = 0.4
     protected_mask = np.zeros((7, 7), dtype=bool)
     protected_mask[2:5, 2:5] = True
 
     result = swampy._detect_local_moran_anomaly_pixels(
         depth,
-        sdi,
         depth_min=0.1,
         protected_mask=protected_mask,
+        dx_m=10.0,
+        dy_m=10.0,
     )
 
     assert result["component_count"] == 0
     assert result["suspicious_pixel_count"] == 0
     assert not np.any(result["suspicious_mask"])
+    assert np.array_equal(result["protected_mask"], protected_mask)
+
+
+def test_clear_small_enclosed_true_components_removes_internal_island():
+    mask = np.zeros((7, 7), dtype=bool)
+    mask[2:4, 2:5] = True
+
+    filtered = swampy._clear_small_enclosed_true_components(mask, max_pixels=15)
+
+    assert not np.any(filtered)
+
+
+def test_clear_small_enclosed_true_components_keeps_border_touching_island():
+    mask = np.zeros((7, 7), dtype=bool)
+    mask[1:4, :2] = True
+
+    filtered = swampy._clear_small_enclosed_true_components(mask, max_pixels=15)
+
+    assert np.array_equal(filtered, mask)
+
+
+def test_fill_small_enclosed_false_components_fills_internal_hole():
+    mask = np.ones((7, 7), dtype=bool)
+    mask[2:4, 2:5] = False
+
+    filled = swampy._fill_small_enclosed_false_components(mask, max_pixels=15)
+
+    assert np.all(filled)
+
+
+def test_collapse_enclosed_binary_regions_removes_large_internal_island():
+    mask = np.zeros((15, 15), dtype=bool)
+    mask[4:11, 4:11] = True
+
+    collapsed = swampy._collapse_enclosed_binary_regions(mask)
+
+    assert not np.any(collapsed)
+
+
+def test_collapse_enclosed_binary_regions_fills_large_internal_hole():
+    mask = np.ones((15, 15), dtype=bool)
+    mask[4:11, 4:11] = False
+
+    collapsed = swampy._collapse_enclosed_binary_regions(mask)
+
+    assert np.all(collapsed)
+
+
+def test_build_anomaly_search_deep_protection_mask_is_empty_for_uniform_depth():
+    depth = ma.array(np.full((21, 21), 5.0, dtype="float32"))
+
+    protected = swampy._build_anomaly_search_deep_protection_mask(depth, depth_min=0.1)
+
+    assert protected.shape == depth.shape
+    assert protected.dtype == bool
+    assert not np.any(protected)

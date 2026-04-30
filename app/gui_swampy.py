@@ -9,6 +9,7 @@ import ctypes
 import copy
 import datetime
 import json
+import math
 import os
 import re
 import subprocess
@@ -1347,6 +1348,7 @@ def gui():
     crop_summary_var = StringVar(value="Full scene")
     deep_water_summary_var = StringVar(value="No deep-water polygons selected")
     deep_water_use_sd_var = BooleanVar(value=False)
+    deep_water_subsample_var = BooleanVar(value=True)
     shallow_substrate_prior_summary_var = StringVar(value="Select at least one target spectrum to enable shallow-water priors")
     shallow_substrate_prior_use_sd_var = BooleanVar(value=False)
     shallow_substrate_prior_target_var = StringVar(value="")
@@ -1426,6 +1428,7 @@ def gui():
         "export_local_moran_raster": False,
         "export_suspicious_binary_raster": False,
         "export_interpolated_rasters": False,
+        "seed_slope_threshold_percent": 10.0,
     }
 
     def update_substrate_ui():
@@ -1681,6 +1684,10 @@ def gui():
         if not valid_polygons:
             return None
         normalized["polygons"] = valid_polygons
+        normalized["subsample_pixels"] = _parse_bool_text(
+            normalized.get("subsample_pixels"),
+            bool(deep_water_subsample_var.get()),
+        )
         normalized["mask_path"] = ""
         normalized["bbox"] = None
         return normalized
@@ -1741,8 +1748,9 @@ def gui():
         if polygon_count <= 0:
             return "No deep-water polygons selected"
         mode_text = "mean ± sd bounds" if deep_water_use_sd_var.get() else "fixed values"
+        sampling_text = "subsampling enabled" if selection.get("subsample_pixels", True) else "all selected pixels retained"
         return (
-            f"{polygon_count} deep-water polygon(s) selected ({mode_text}). "
+            f"{polygon_count} deep-water polygon(s) selected ({mode_text}; {sampling_text}). "
             "CHL, CDOM and NAP parameter bounds below are disabled and inferred from those pixels."
         )
 
@@ -1774,6 +1782,8 @@ def gui():
     def _set_deep_water_selection(selection):
         nonlocal deep_water_selection
         deep_water_selection = _normalise_deep_water_selection(selection)
+        if deep_water_selection is not None:
+            deep_water_subsample_var.set(bool(deep_water_selection.get("subsample_pixels", True)))
         deep_water_summary_var.set(_format_deep_water_summary(deep_water_selection))
         _update_water_prior_parameter_controls()
         _update_prior_mutual_exclusivity()
@@ -1808,6 +1818,8 @@ def gui():
         _set_widget_enabled(crop_button, bool(_current_input_file_list()))
 
     def _refresh_deep_water_summary(*_args):
+        if deep_water_selection is not None:
+            deep_water_selection["subsample_pixels"] = bool(deep_water_subsample_var.get())
         deep_water_summary_var.set(_format_deep_water_summary(deep_water_selection))
         _update_water_prior_parameter_controls()
         update_run_button_state()
@@ -2066,10 +2078,16 @@ def gui():
         lat_min = float(np.nanmin(lat_grid[finite_coord_mask]))
         lat_max = float(np.nanmax(lat_grid[finite_coord_mask]))
 
-        existing_selection = _normalise_deep_water_selection(deep_water_selection) or {"polygons": []}
+        existing_selection = _normalise_deep_water_selection(deep_water_selection) or {
+            "polygons": [],
+            "subsample_pixels": bool(deep_water_subsample_var.get()),
+        }
         existing_source_path = str(existing_selection.get("source_path") or "").strip()
         if existing_source_path and not _paths_equivalent(existing_source_path, first_image):
-            existing_selection = {"polygons": []}
+            existing_selection = {
+                "polygons": [],
+                "subsample_pixels": bool(deep_water_subsample_var.get()),
+            }
 
         return {
             "mode": "polygons",
@@ -2091,8 +2109,19 @@ def gui():
             "allow_mask_import": False,
             "allow_rectangle": False,
             "allow_polygon": True,
+            "option_checkboxes": [
+                {
+                    "id": "subsample_pixels",
+                    "label": "Subsample selected pixels when many polygons overlap large deep-water areas",
+                    "hint": "Keeps deep-water prior estimation faster on large selections.",
+                    "value": bool(existing_selection.get("subsample_pixels", True)),
+                    "summary_when_true": "subsampling enabled",
+                    "summary_when_false": "all selected pixels retained",
+                },
+            ],
             "selection": {
                 "polygons": list(existing_selection.get("polygons") or []),
+                "subsample_pixels": bool(existing_selection.get("subsample_pixels", True)),
             },
         }
 
@@ -2495,9 +2524,12 @@ def gui():
         export_local_moran_var = BooleanVar(value=bool(anomaly_search_settings["export_local_moran_raster"]))
         export_suspicious_binary_var = BooleanVar(value=bool(anomaly_search_settings["export_suspicious_binary_raster"]))
         export_interpolated_var = BooleanVar(value=bool(anomaly_search_settings["export_interpolated_rasters"]))
+        seed_slope_threshold_var = StringVar(
+            value=str(anomaly_search_settings.get("seed_slope_threshold_percent", 10.0))
+        )
 
         def build_settings(settings_frame):
-            settings_frame.columnconfigure(0, weight=1)
+            settings_frame.columnconfigure(1, weight=1)
             next_row = 0
             if not feature_available:
                 ttk.Label(
@@ -2519,24 +2551,37 @@ def gui():
                 ).grid(row=next_row, column=0, sticky="w", pady=(0, 8))
                 next_row += 1
 
+            ttk.Label(
+                settings_frame,
+                text="Seed slope threshold (%)",
+            ).grid(row=next_row, column=0, sticky="w", pady=(0, 6))
+            seed_slope_entry = ttk.Entry(
+                settings_frame,
+                textvariable=seed_slope_threshold_var,
+                width=10,
+            )
+            seed_slope_entry.grid(row=next_row, column=1, sticky="w", padx=(8, 0), pady=(0, 6))
+            next_row += 1
+
             export_local_moran_check = ttk.Checkbutton(
                 settings_frame,
-                text="Export edge / plateau debug rasters",
+                text="Export slope / seed / true-deep debug rasters",
                 variable=export_local_moran_var,
             )
-            export_local_moran_check.grid(row=next_row, column=0, sticky="w", pady=2)
+            export_local_moran_check.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=2)
             export_suspicious_binary_check = ttk.Checkbutton(
                 settings_frame,
-                text="Export suspicious/not-suspicious raster",
+                text="Export suspicious and confident masks",
                 variable=export_suspicious_binary_var,
             )
-            export_suspicious_binary_check.grid(row=next_row + 1, column=0, sticky="w", pady=2)
+            export_suspicious_binary_check.grid(row=next_row + 1, column=0, columnspan=2, sticky="w", pady=2)
             export_interpolated_check = ttk.Checkbutton(
                 settings_frame,
-                text="Export interpolated depth / CHL / CDOM / NAP rasters",
+                text="Export interpolated depth / CHL / CDOM / NAP multilayer raster",
                 variable=export_interpolated_var,
             )
-            export_interpolated_check.grid(row=next_row + 2, column=0, sticky="w", pady=2)
+            export_interpolated_check.grid(row=next_row + 2, column=0, columnspan=2, sticky="w", pady=2)
+            _set_widget_enabled(seed_slope_entry, feature_enabled)
             _set_widget_enabled(export_local_moran_check, feature_enabled)
             _set_widget_enabled(export_suspicious_binary_check, feature_enabled)
             _set_widget_enabled(export_interpolated_check, feature_enabled)
@@ -2544,6 +2589,15 @@ def gui():
         def apply_anomaly_search_changes():
             if not feature_enabled:
                 return True
+            try:
+                seed_slope_threshold = float(seed_slope_threshold_var.get())
+            except (TypeError, ValueError):
+                messagebox.showerror("Invalid value", "Seed slope threshold must be numeric.", parent=root)
+                return False
+            if seed_slope_threshold <= 0.0:
+                messagebox.showerror("Invalid value", "Seed slope threshold must be greater than 0.", parent=root)
+                return False
+            anomaly_search_settings["seed_slope_threshold_percent"] = seed_slope_threshold
             anomaly_search_settings["export_local_moran_raster"] = bool(export_local_moran_var.get())
             anomaly_search_settings["export_suspicious_binary_raster"] = bool(export_suspicious_binary_var.get())
             anomaly_search_settings["export_interpolated_rasters"] = bool(export_interpolated_var.get())
@@ -2551,8 +2605,8 @@ def gui():
 
         open_feature_popup(
             "False-deep bathymetry correction",
-            "This stage detects suspicious false-deep areas as deeper / lower-SDI plateaus that begin at sharp boundaries.\n\n"
-            "It looks for places where depth increases suddenly and SDI drops suddenly, then grows inward over connected pixels that remain deep and low in SDI. Suspicious pixels are then corrected by linearly interpolating depth, CHL, CDOM, and NAP from non-suspicious pixels and re-optimising only the substrate fractions.",
+            "This stage detects suspicious false-deep areas from steep depth transitions.\n\n"
+            "It keeps the stable true-deep mask, marks all pixels above the seed slope threshold as suspicious, and also marks enclosed lower-slope patches when a steep belt surrounds them and those enclosed pixels are deeper than the direct outside of that belt. Suspicious pixels are corrected by linearly interpolating depth, CHL, CDOM, and NAP from confident pixels and re-optimising only the substrate fractions.",
             settings_builder=build_settings,
             apply_callback=apply_anomaly_search_changes,
             geometry="760x260",
@@ -2612,42 +2666,45 @@ def gui():
 
     def open_relaxed_constraints_popup():
         feature_enabled = bool(relaxed.get())
-        fully_relaxed_var = BooleanVar(value=bool(fully_relaxed_flag.get()))
+        standardize_relaxed_outputs_var = BooleanVar(
+            value=bool(standardize_relaxed_substrate_outputs_flag.get())
+        )
 
         def build_settings(settings_frame):
             ttk.Label(
                 settings_frame,
                 text=(
                     "Standard relaxed mode keeps the internal substrate-cover sum between 0.5 and 2.0, "
-                    "but the exported target-cover maps are standardized back between 0 and 1 for the user.\n\n"
+                    "and now exports the raw fitted target-cover values plus a substrate-sum band.\n\n"
                     "If only two target spectra are active, SWAMpy reduces the problem to one cover variable "
                     "(x for target 1 and 1-x for target 2) to speed up the optimisation.\n\n"
-                    "Fully relaxed mode removes the cross-target cover constraint completely and exports the raw fitted target values."
+                    "Enable the standardisation checkbox below only if you want relaxed substrate outputs scaled "
+                    "back between 0 and 1 for display."
                 ),
                 wraplength=620,
                 justify="left",
             ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
-            fully_relaxed_check = ttk.Checkbutton(
+            standardize_relaxed_outputs_check = ttk.Checkbutton(
                 settings_frame,
-                text="Use fully relaxed substrate mode",
-                variable=fully_relaxed_var,
+                text="Standardize relaxed substrate outputs between 0 and 1",
+                variable=standardize_relaxed_outputs_var,
             )
-            fully_relaxed_check.grid(row=1, column=0, sticky="w")
-            _set_widget_enabled(fully_relaxed_check, feature_enabled)
+            standardize_relaxed_outputs_check.grid(row=1, column=0, sticky="w")
+            _set_widget_enabled(standardize_relaxed_outputs_check, feature_enabled)
 
         def apply_relaxed_changes():
             if not relaxed.get():
-                fully_relaxed_flag.set(False)
+                standardize_relaxed_substrate_outputs_flag.set(False)
                 return
-            fully_relaxed_flag.set(bool(fully_relaxed_var.get()))
+            standardize_relaxed_substrate_outputs_flag.set(bool(standardize_relaxed_outputs_var.get()))
 
         open_feature_popup(
             "Relaxed substrate constraints",
             "When enabled, the workflow stops enforcing a strict convex substrate mixture and uses a relaxed treatment instead.",
             settings_builder=build_settings,
             apply_callback=apply_relaxed_changes,
-            geometry="800x340",
-            minsize=(740, 280),
+            geometry="820x390",
+            minsize=(760, 320),
         )
 
     def open_post_processing_popup():
@@ -4673,7 +4730,7 @@ def gui():
     initial_guess_debug_flag = BooleanVar(value=False)
     output_modeled_reflectance_flag = BooleanVar(value=False)
     relaxed = BooleanVar(value=False)
-    fully_relaxed_flag = BooleanVar(value=False)
+    standardize_relaxed_substrate_outputs_flag = BooleanVar(value=False)
     pp = BooleanVar(value=False)
     allow_split = BooleanVar(value=False)
     chunk_rows = StringVar(value="512")
@@ -4737,7 +4794,7 @@ def gui():
 
     def update_relaxed_controls(*_args):
         if not relaxed.get():
-            fully_relaxed_flag.set(False)
+            standardize_relaxed_substrate_outputs_flag.set(False)
 
     optimize_initial_guesses_flag.trace_add("write", update_initial_guess_controls)
     allow_split.trace_add("write", update_split_controls)
@@ -5005,6 +5062,7 @@ def gui():
     ):
         tracked_var.trace_add("write", update_run_button_state)
     deep_water_use_sd_var.trace_add("write", _refresh_deep_water_summary)
+    deep_water_subsample_var.trace_add("write", _refresh_deep_water_summary)
     shallow_substrate_prior_use_sd_var.trace_add("write", _refresh_shallow_substrate_prior_summary)
     shallow_substrate_prior_target_var.trace_add("write", _refresh_shallow_substrate_prior_summary)
     input_image_var.trace_add("write", _track_input_field_change)
@@ -5236,12 +5294,19 @@ def gui():
 
             loaded_deep_water_enabled = _parse_bool_text(_xml_find_text(xml_root, "deep_water_enabled"), False)
             deep_water_use_sd_var.set(_parse_bool_text(_xml_find_text(xml_root, "deep_water_use_sd_bounds"), False))
+            deep_water_subsample_var.set(
+                _parse_bool_text(_xml_find_text(xml_root, "deep_water_subsample_pixels"), True)
+            )
             if loaded_deep_water_enabled:
                 try:
                     deep_water_polygons_json = _xml_find_text(xml_root, "deep_water_polygons_json", "") or "[]"
                     loaded_polygons = json.loads(deep_water_polygons_json)
                     _set_deep_water_selection({
                         "polygons": loaded_polygons,
+                        "subsample_pixels": _parse_bool_text(
+                            _xml_find_text(xml_root, "deep_water_subsample_pixels"),
+                            True,
+                        ),
                         "source_path": loaded_images[0] if loaded_images else _xml_find_text(xml_root, "deep_water_source_image", ""),
                     })
                 except Exception:
@@ -5294,7 +5359,14 @@ def gui():
         five_initial_guess_testing_flag.set(_parse_bool_text(_xml_find_text(xml_root, "use_five_initial_guesses"), five_initial_guess_testing_flag.get()))
         initial_guess_debug_flag.set(_parse_bool_text(_xml_find_text(xml_root, "initial_guess_debug"), initial_guess_debug_flag.get()))
         pp.set(_parse_bool_text(_xml_find_text(xml_root, "post_processing", _xml_find_text(xml_root, "pproc")), pp.get()))
-        fully_relaxed_flag.set(_parse_bool_text(_xml_find_text(xml_root, "fully_relaxed"), fully_relaxed_flag.get()))
+        if _parse_bool_text(_xml_find_text(xml_root, "fully_relaxed"), False):
+            relaxed.set(True)
+        standardize_relaxed_substrate_outputs_flag.set(
+            _parse_bool_text(
+                _xml_find_text(xml_root, "standardize_relaxed_substrate_outputs"),
+                standardize_relaxed_substrate_outputs_flag.get(),
+            )
+        )
         output_modeled_reflectance_flag.set(_parse_bool_text(_xml_find_text(xml_root, "output_modeled_reflectance"), output_modeled_reflectance_flag.get()))
         anomaly_search_flag.set(_parse_bool_text(_xml_find_text(xml_root, "anomaly_search_enabled"), anomaly_search_flag.get()))
         relaxed.set(_parse_bool_text(_xml_find_text(xml_root, "relaxed"), relaxed.get()))
@@ -5331,6 +5403,19 @@ def gui():
             _xml_find_text(xml_root, "anomaly_search_export_interpolated_rasters"),
             anomaly_search_settings["export_interpolated_rasters"],
         )
+        loaded_seed_slope_threshold = _xml_find_text(xml_root, "anomaly_search_seed_slope_threshold_percent")
+        if loaded_seed_slope_threshold in (None, ""):
+            legacy_degrees_threshold = _xml_find_text(xml_root, "anomaly_search_seed_slope_threshold_degrees")
+            if legacy_degrees_threshold not in (None, ""):
+                try:
+                    loaded_seed_slope_threshold = 100.0 * math.tan(math.radians(float(legacy_degrees_threshold)))
+                except (TypeError, ValueError):
+                    loaded_seed_slope_threshold = None
+        if loaded_seed_slope_threshold not in (None, ""):
+            try:
+                anomaly_search_settings["seed_slope_threshold_percent"] = float(loaded_seed_slope_threshold)
+            except (TypeError, ValueError):
+                pass
 
         use_bathy = _parse_bool_text(_xml_find_text(xml_root, "use_bathy"), False)
         default_emodnet_path = _resolve_bundled_resource(cwd, os.path.join(cwd, "Data", "Bathy", "E4_2024.tif"))
@@ -5475,7 +5560,7 @@ def gui():
             "optimize_initial_guesses": bool(optimize_initial_guesses_flag.get()),
             "use_five_initial_guesses": bool(five_initial_guess_testing_flag.get()),
             "initial_guess_debug": bool(initial_guess_debug_flag.get()),
-            "fully_relaxed": bool(fully_relaxed_flag.get()),
+            "standardize_relaxed_substrate_outputs": bool(standardize_relaxed_substrate_outputs_flag.get()),
             "output_modeled_reflectance": bool(output_modeled_reflectance_flag.get()),
             "anomaly_search_settings": {
                 "enabled": anomaly_search_enabled,
@@ -5531,7 +5616,7 @@ def gui():
             "optimize_initial_guesses",
             "use_five_initial_guesses",
             "initial_guess_debug",
-            "fully_relaxed",
+            "standardize_relaxed_substrate_outputs",
             "output_modeled_reflectance",
             "anomaly_search_settings",
             "post_processing",
@@ -5667,6 +5752,11 @@ def gui():
                     add("Input", "Crop point buffer (m)", crop.get("mask_buffer_m", ""))
             add("Input", "Deep-water priors", bool(version.get("deep_water_selection")))
             add("Input", "Deep-water mean +/- sd bounds", version.get("deep_water_use_sd_bounds", False))
+            add(
+                "Input",
+                "Deep-water pixel subsampling",
+                (version.get("deep_water_selection") or {}).get("subsample_pixels", True),
+            )
             shallow_prior = version.get("shallow_substrate_prior_selection") or {}
             add("Input", "Shallow-water substrate priors", bool(shallow_prior))
             add("Input", "Shallow-water target substrate", shallow_prior.get("target_name", ""))
@@ -5702,7 +5792,11 @@ def gui():
             add("Processing", "Above-water Rrs input", version.get("rrs_flag", True))
             add("Processing", "Reflectance input", version.get("reflectance_input", False))
             add("Processing", "Relaxed constraints", version.get("relaxed", False))
-            add("Processing", "Fully relaxed", version.get("fully_relaxed", False))
+            add(
+                "Processing",
+                "Standardize relaxed substrate outputs",
+                version.get("standardize_relaxed_substrate_outputs", False),
+            )
             add("Processing", "Shallow water adjustment", version.get("shallow", False))
             add("Processing", "Optimise initial guesses", version.get("optimize_initial_guesses", False))
             add("Processing", "Use 5 initial guesses", version.get("use_five_initial_guesses", False))
@@ -5996,6 +6090,7 @@ def gui():
             "crop_source_image": str(version_crop.get("source_path", "")) if version_crop else "",
             "deep_water_enabled": bool(version_deep_water),
             "deep_water_use_sd_bounds": bool(version.get("deep_water_use_sd_bounds", False)),
+            "deep_water_subsample_pixels": bool((version_deep_water or {}).get("subsample_pixels", True)),
             "deep_water_polygons_json": json.dumps((version_deep_water or {}).get("polygons") or []),
             "deep_water_source_image": str((version_deep_water or {}).get("source_path", "")) if version_deep_water else "",
             "shallow_substrate_prior_enabled": bool(version_shallow_prior),
@@ -6021,12 +6116,15 @@ def gui():
             "use_five_initial_guesses": bool(version.get("use_five_initial_guesses", False)),
             "initial_guess_debug": bool(version.get("initial_guess_debug", False)),
             "post_processing": bool(version.get("post_processing", False)),
-            "fully_relaxed": bool(version.get("fully_relaxed", False)),
+            "standardize_relaxed_substrate_outputs": bool(
+                version.get("standardize_relaxed_substrate_outputs", False)
+            ),
             "output_modeled_reflectance": bool(version.get("output_modeled_reflectance", False)),
             "anomaly_search_enabled": bool(version_anomaly_search.get("enabled", False)),
             "anomaly_search_export_local_moran_raster": bool(version_anomaly_search.get("export_local_moran_raster", False)),
             "anomaly_search_export_suspicious_binary_raster": bool(version_anomaly_search.get("export_suspicious_binary_raster", False)),
             "anomaly_search_export_interpolated_rasters": bool(version_anomaly_search.get("export_interpolated_rasters", False)),
+            "anomaly_search_seed_slope_threshold_percent": float(version_anomaly_search.get("seed_slope_threshold_percent", 10.0)),
             "relaxed": bool(version.get("relaxed", False)),
             "output_folder": out_folder,
             "output_file": initial_ofile,
@@ -6083,7 +6181,9 @@ def gui():
             "optimize_initial_guesses": bool(version.get("optimize_initial_guesses", False)),
             "use_five_initial_guesses": bool(version.get("use_five_initial_guesses", False)),
             "initial_guess_debug": bool(version.get("initial_guess_debug", False)),
-            "fully_relaxed": bool(version.get("fully_relaxed", False)),
+            "standardize_relaxed_substrate_outputs": bool(
+                version.get("standardize_relaxed_substrate_outputs", False)
+            ),
             "output_modeled_reflectance": bool(version.get("output_modeled_reflectance", False)),
             "anomaly_search_settings": copy.deepcopy(version.get("anomaly_search_settings", {})),
             "xml_dict": _build_input_dict_for_version(version, file_iop, file_sensor, ofile, version_index),
@@ -6109,7 +6209,7 @@ def gui():
         primary_version["optimize_initial_guesses"],
         primary_version["use_five_initial_guesses"],
         primary_version["initial_guess_debug"],
-        primary_version["fully_relaxed"],
+        primary_version["standardize_relaxed_substrate_outputs"],
         primary_version["output_modeled_reflectance"],
         primary_version["anomaly_search_settings"],
         primary_version["pmin"],

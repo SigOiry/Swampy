@@ -161,7 +161,7 @@ def test_two_target_cover_x_bounds_respects_both_active_substrate_bounds():
     assert output_calculation._two_target_cover_x_bounds(bounds) == (0.2, 0.8)
 
 
-def test_minimize_pixel_uses_single_fraction_mode_for_relaxed_two_target_case():
+def test_minimize_pixel_uses_unconstrained_full_space_for_relaxed_case():
     class DummyObjective:
         def __init__(self):
             self._nedr = np.ones(2, dtype="float32")
@@ -186,9 +186,74 @@ def test_minimize_pixel_uses_single_fraction_mode_for_relaxed_two_target_case():
         (0.0, 1.0),
         (0.0, 0.0),
     )
+    cons = ()  # relaxed mode: no constraints
+
+    original_minimize = output_calculation.sb.minimize
+    try:
+        output_calculation.worker_init(
+            DummyObjective(),
+            p0,
+            "SLSQP",
+            bounds,
+            cons,
+            False,
+            None,
+            False,
+            False,
+            True,  # relaxed=True
+        )
+
+        call_info = {}
+
+        def fake_minimize(objective, p0, method, bounds, constraints, options, obs_rrs):
+            call_info["parameter_count"] = len(p0)
+            call_info["bounds_count"] = len(bounds)
+            call_info["constraints"] = constraints
+            result_x = list(p0[:4]) + [0.7, 0.3, 0.0]
+            return sb.minimize_result(np.array(result_x, dtype=float), 4, True)
+
+        output_calculation.sb.minimize = fake_minimize
+
+        result = output_calculation.minimize_pixel(
+            (0, 0, np.array([0.01, 0.02], dtype="float32"), None, False, False)
+        )
+    finally:
+        output_calculation.sb.minimize = original_minimize
+
+    assert call_info["parameter_count"] == 7
+    assert call_info["bounds_count"] == 7
+    assert call_info["constraints"] == ()
+    assert result[2] is True
+    assert np.allclose(result[4][4:7], np.array([0.7, 0.3, 0.0], dtype=float))
+
+
+def test_minimize_pixel_uses_single_fraction_mode_for_strict_two_target_case():
+    class DummyObjective:
+        def __init__(self):
+            self._nedr = np.ones(2, dtype="float32")
+            self._error_func_name = "f"
+            self.observed_rrs = None
+
+        def __call__(self, parameters):
+            parameters = np.asarray(parameters, dtype=float)
+            target = 0.2
+            error = float((parameters[4] - target) ** 2)
+            jacobian = np.zeros(7, dtype=float)
+            jacobian[4] = 2.0 * (parameters[4] - target)
+            return error, jacobian
+
+    p0 = np.array([0.2, 0.1, 0.05, 2.0, 1 / 3, 1 / 3, 1 / 3], dtype="float32")
+    bounds = (
+        (0.0, 1.0),
+        (0.0, 1.0),
+        (0.0, 1.0),
+        (0.5, 5.0),
+        (0.0, 1.0),
+        (0.0, 1.0),
+        (0.0, 0.0),
+    )
     cons = (
-        {'type': 'ineq', 'fun': output_calculation.constraint_upper_relaxed, 'jac': output_calculation.constraint_upper_relaxed_jac},
-        {'type': 'ineq', 'fun': output_calculation.constraint_lower_relaxed, 'jac': output_calculation.constraint_lower_relaxed_jac},
+        {'type': 'eq', 'fun': output_calculation.constraint_sum_to_one, 'jac': output_calculation.constraint_sum_to_one_jac},
     )
 
     original_minimize = output_calculation.sb.minimize
@@ -203,7 +268,7 @@ def test_minimize_pixel_uses_single_fraction_mode_for_relaxed_two_target_case():
             None,
             False,
             False,
-            True,
+            False,
         )
 
         call_info = {}
@@ -212,7 +277,7 @@ def test_minimize_pixel_uses_single_fraction_mode_for_relaxed_two_target_case():
             call_info["parameter_count"] = len(p0)
             call_info["bounds_count"] = len(bounds)
             call_info["constraints"] = constraints
-            return sb.minimize_result(np.array([p0[0], p0[1], p0[2], p0[3], 0.7], dtype=float), 4, True)
+            return sb.minimize_result(np.array([p0[0], p0[1], p0[2], p0[3], 0.2], dtype=float), 4, True)
 
         output_calculation.sb.minimize = fake_minimize
 
@@ -226,25 +291,108 @@ def test_minimize_pixel_uses_single_fraction_mode_for_relaxed_two_target_case():
     assert call_info["bounds_count"] == 5
     assert call_info["constraints"] == ()
     assert result[2] is True
-    assert np.allclose(result[4][4:7], np.array([0.7, 0.3, 0.0], dtype=float))
+    assert np.allclose(result[4][4:7], np.array([0.2, 0.8, 0.0], dtype=float))
+
+
+def test_build_rerun_setup_seeds_feasible_two_target_guess_in_strict_mode():
+    siop = {
+        "p_min": np.array([0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0], dtype="float32"),
+        "p_max": np.array([1.0, 1.0, 1.0, 10.0, 1.0, 1.0, 0.0], dtype="float32"),
+        "p_bounds": (
+            (0.0, 1.0),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            (0.1, 10.0),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            (0.0, 0.0),
+        ),
+    }
+
+    p0, cons = output_calculation._build_rerun_setup(
+        siop,
+        relaxed=False,
+        allow_target_sum_over_one=False,
+    )
+
+    assert np.allclose(p0[4:7], np.array([0.5, 0.5, 0.0], dtype=float))
+    assert len(cons) == 1
+
+
+def test_minimize_pixel_uses_substrate_multistart_when_depth_is_free():
+    class DummyObjective:
+        def __init__(self):
+            self._nedr = np.ones(2, dtype="float32")
+            self._error_func_name = "f"
+            self.observed_rrs = None
+
+        def __call__(self, parameters):
+            parameters = np.asarray(parameters, dtype=float)
+            target = np.array([0.8, 0.1, 0.1], dtype=float)
+            error = float(np.sum((parameters[4:7] - target) ** 2))
+            jacobian = np.zeros(7, dtype=float)
+            jacobian[4:7] = 2.0 * (parameters[4:7] - target)
+            return error, jacobian
+
+    p0 = np.array([0.2, 0.1, 0.05, 2.0, 1 / 3, 1 / 3, 1 / 3], dtype="float32")
+    bounds = (
+        (0.0, 1.0),
+        (0.0, 1.0),
+        (0.0, 1.0),
+        (0.5, 5.0),
+        (0.0, 1.0),
+        (0.0, 1.0),
+        (0.0, 1.0),
+    )
+    cons = (
+        {'type': 'eq', 'fun': output_calculation.constraint_sum_to_one, 'jac': output_calculation.constraint_sum_to_one_jac},
+    )
+
+    original_minimize = output_calculation.sb.minimize
+    try:
+        output_calculation.worker_init(
+            DummyObjective(),
+            p0,
+            "SLSQP",
+            bounds,
+            cons,
+            False,
+            None,
+            False,
+            False,
+            False,
+        )
+
+        recorded_substrate_starts = []
+
+        def fake_minimize(objective, p0, method, bounds, constraints, options, obs_rrs):
+            recorded_substrate_starts.append(tuple(np.asarray(p0[4:7], dtype=float)))
+            return sb.minimize_result(np.asarray(p0, dtype=float), 3, True)
+
+        output_calculation.sb.minimize = fake_minimize
+
+        result = output_calculation.minimize_pixel(
+            (0, 0, np.array([0.01, 0.02], dtype="float32"), None, False, False)
+        )
+    finally:
+        output_calculation.sb.minimize = original_minimize
+
+    unique_starts = {tuple(np.round(start, 6)) for start in recorded_substrate_starts}
+    assert result[2] is True
+    assert len(unique_starts) > 1
 
 
 def test_cover_sum_validation_changes_with_relaxation_mode():
     guess = np.array([0.0, 0.0, 0.0, 1.0, 0.8, 0.8, 0.0], dtype="float32")
     original_relaxed = output_calculation._WORKER_RELAXED
-    original_fully_relaxed = output_calculation._WORKER_FULLY_RELAXED
     try:
         output_calculation._WORKER_RELAXED = False
-        output_calculation._WORKER_FULLY_RELAXED = False
         assert output_calculation._cover_sum_is_valid(guess) is False
 
         output_calculation._WORKER_RELAXED = True
-        output_calculation._WORKER_FULLY_RELAXED = False
         assert output_calculation._cover_sum_is_valid(guess) is True
 
         output_calculation._WORKER_RELAXED = True
-        output_calculation._WORKER_FULLY_RELAXED = True
         assert output_calculation._cover_sum_is_valid(np.array([0, 0, 0, 1, 5, 5, 5], dtype="float32")) is True
     finally:
         output_calculation._WORKER_RELAXED = original_relaxed
-        output_calculation._WORKER_FULLY_RELAXED = original_fully_relaxed

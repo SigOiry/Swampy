@@ -22,32 +22,12 @@ except Exception:
 from  alewriter import AleWriter
 from sambuca.error import error_all
 
-low_relax = 0.5
-high_relax = 2.0
-
-
 def constraint_sum_to_one(x):
     return 1 - (x[4] + x[5] + x[6])
 
 
 def constraint_sum_to_one_jac(x):
     return np.array([0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -1.0])
-
-
-def constraint_upper_relaxed(x):
-    return high_relax - (x[4] + x[5] + x[6])
-
-
-def constraint_upper_relaxed_jac(x):
-    return np.array([0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -1.0])
-
-
-def constraint_lower_relaxed(x):
-    return (x[4] + x[5] + x[6]) - low_relax
-
-
-def constraint_lower_relaxed_jac(x):
-    return np.array([0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
 
 
 # Module-level globals filled by worker_init to avoid pickling large objects per-task
@@ -62,7 +42,6 @@ _WORKER_DEPTH_STARTS = None
 _WORKER_OPTIMIZE_INITIAL_GUESSES = False
 _WORKER_USE_FIVE_INITIAL_GUESSES = False
 _WORKER_RELAXED = False
-_WORKER_FULLY_RELAXED = False
 _SPAWN_START_METHOD_READY = False
 
 
@@ -89,7 +68,7 @@ def _ensure_spawn_start_method():
 
 def _create_worker_pool(objective, p0, opt_met, bounds, cons, shallow,
                         bathy_tolerance, optimize_initial_guesses,
-                        use_five_initial_guesses, relaxed, fully_relaxed,
+                        use_five_initial_guesses, relaxed,
                         free_cpu=0, max_tasks=None):
     """Create a worker pool configured for pixel-wise optimization."""
     _configure_worker_process_environment()
@@ -114,7 +93,6 @@ def _create_worker_pool(objective, p0, opt_met, bounds, cons, shallow,
             optimize_initial_guesses,
             use_five_initial_guesses,
             relaxed,
-            fully_relaxed,
         ),
     )
 _WORKER_SUBSTRATE_STARTS = (
@@ -202,11 +180,9 @@ def _cover_sum_is_valid(guess, atol=1e-12):
     guess = np.asarray(guess, dtype=float)
     if guess.size < 7:
         return True
-    cover_sum = float(np.sum(guess[4:7]))
-    if _WORKER_FULLY_RELAXED:
-        return True
     if _WORKER_RELAXED:
-        return (low_relax - atol) <= cover_sum <= (high_relax + atol)
+        return True
+    cover_sum = float(np.sum(guess[4:7]))
     return cover_sum <= (1.0 + atol)
 
 
@@ -214,7 +190,7 @@ def _enforce_cover_sum_limit(guess):
     guess = np.asarray(guess, dtype=float).copy()
     if guess.size < 7:
         return guess
-    if _WORKER_FULLY_RELAXED or _WORKER_RELAXED:
+    if _WORKER_RELAXED:
         return guess
     cover_sum = float(np.sum(guess[4:7]))
     if cover_sum > 1.0 and cover_sum > 0.0:
@@ -261,8 +237,26 @@ def _two_target_cover_x_bounds(bounds_local, atol=1e-12):
     return (x_lo, x_hi)
 
 
-def _should_use_two_target_cover_mode(bounds_local, relaxed, fully_relaxed=False):
-    return bool(relaxed and (not fully_relaxed) and _two_target_cover_x_bounds(bounds_local) is not None)
+def _should_use_two_target_cover_mode(bounds_local, relaxed):
+    return bool((not relaxed) and _two_target_cover_x_bounds(bounds_local) is not None)
+
+
+def _seed_cover_guess_for_bounds(guess, bounds_local, relaxed):
+    guess = np.asarray(guess, dtype=float).copy()
+    if guess.size < 7:
+        return guess
+
+    x_bounds = _two_target_cover_x_bounds(bounds_local)
+    if x_bounds is not None and not relaxed:
+        x_mid = 0.5 * (float(x_bounds[0]) + float(x_bounds[1]))
+        guess[4] = x_mid
+        guess[5] = 1.0 - x_mid
+        guess[6] = 0.0
+        return guess
+
+    if not relaxed:
+        guess[4:7] = 1.0 / 3.0
+    return guess
 
 
 def _reduce_full_guess_to_two_target_mode(guess, x_bounds):
@@ -420,10 +414,10 @@ def _append_unique_start(start_vectors, candidate, atol=1e-12):
     start_vectors.append(candidate)
 
 
-def worker_init(objective, p0, opt_met, bounds, cons, shallow, bathy_tol=None, optimize_initial_guesses=False, use_five_initial_guesses=False, relaxed=False, fully_relaxed=False):
+def worker_init(objective, p0, opt_met, bounds, cons, shallow, bathy_tol=None, optimize_initial_guesses=False, use_five_initial_guesses=False, relaxed=False):
     """Initializer called once per worker process to set globals and avoid
     pickling large objects for every task."""
-    global _WORKER_OBJECTIVE, _WORKER_P0, _WORKER_OPT_MET, _WORKER_BOUNDS, _WORKER_CONS, _WORKER_SHALLOW, _WORKER_BATHY_TOL, _WORKER_DEPTH_STARTS, _WORKER_OPTIMIZE_INITIAL_GUESSES, _WORKER_USE_FIVE_INITIAL_GUESSES, _WORKER_RELAXED, _WORKER_FULLY_RELAXED
+    global _WORKER_OBJECTIVE, _WORKER_P0, _WORKER_OPT_MET, _WORKER_BOUNDS, _WORKER_CONS, _WORKER_SHALLOW, _WORKER_BATHY_TOL, _WORKER_DEPTH_STARTS, _WORKER_OPTIMIZE_INITIAL_GUESSES, _WORKER_USE_FIVE_INITIAL_GUESSES, _WORKER_RELAXED
     _WORKER_OBJECTIVE = objective
     _WORKER_P0 = p0
     _WORKER_OPT_MET = opt_met
@@ -434,7 +428,6 @@ def worker_init(objective, p0, opt_met, bounds, cons, shallow, bathy_tol=None, o
     _WORKER_OPTIMIZE_INITIAL_GUESSES = bool(optimize_initial_guesses)
     _WORKER_USE_FIVE_INITIAL_GUESSES = bool(use_five_initial_guesses)
     _WORKER_RELAXED = bool(relaxed)
-    _WORKER_FULLY_RELAXED = bool(fully_relaxed)
     if bounds is not None:
         depth_lo = max(bounds[3][0], 1e-3)
         depth_hi = bounds[3][1]
@@ -498,7 +491,14 @@ def minimize_pixel(arg):
         else:
             bounds_local = None
 
-    two_target_cover_mode = _should_use_two_target_cover_mode(bounds_local, _WORKER_RELAXED, _WORKER_FULLY_RELAXED)
+    if p0_override is None:
+        p0_base = _seed_cover_guess_for_bounds(
+            p0_base,
+            bounds_local,
+            _WORKER_RELAXED,
+        )
+
+    two_target_cover_mode = _should_use_two_target_cover_mode(bounds_local, _WORKER_RELAXED)
 
     selected_initial_guess = None
     if p0_override is not None and not _WORKER_OPTIMIZE_INITIAL_GUESSES:
@@ -558,16 +558,21 @@ def minimize_pixel(arg):
                 start_vectors = []
                 _append_unique_start(start_vectors, reduced_selected_guess)
                 for depth_start in _WORKER_DEPTH_STARTS:
-                    p0_local = np.asarray(reduced_selected_guess, dtype=float).copy()
-                    p0_local[3] = float(depth_start)
-                    _append_unique_start(start_vectors, p0_local)
+                    for x_start in x_start_values:
+                        p0_local = np.asarray(reduced_selected_guess, dtype=float).copy()
+                        p0_local[3] = float(depth_start)
+                        p0_local[4] = float(x_start)
+                        _append_unique_start(start_vectors, p0_local)
             else:
                 start_vectors = []
                 reduced_base = _reduce_full_guess_to_two_target_mode(p0_base, x_bounds)
+                _append_unique_start(start_vectors, reduced_base)
                 for depth_start in _WORKER_DEPTH_STARTS:
-                    p0_local = reduced_base.copy()
-                    p0_local[3] = float(depth_start)
-                    _append_unique_start(start_vectors, p0_local)
+                    for x_start in x_start_values:
+                        p0_local = reduced_base.copy()
+                        p0_local[3] = float(depth_start)
+                        p0_local[4] = float(x_start)
+                        _append_unique_start(start_vectors, p0_local)
 
         for p0_local in start_vectors:
             res = sb.minimize(
@@ -636,23 +641,28 @@ def minimize_pixel(arg):
                         best_result = res
         result = best_result
     else:
-        # Depth is free: multi-start over logarithmically spaced depths to escape
-        # shallow local minima caused by the depth-albedo degeneracy.
+        # Depth is free: jointly vary depth and substrate starts to escape
+        # local minima caused by the depth-albedo degeneracy.
         best_result = None
         best_error = np.inf
         if _WORKER_OPTIMIZE_INITIAL_GUESSES:
             start_vectors = []
             _append_unique_start(start_vectors, selected_initial_guess)
             for depth_start in _WORKER_DEPTH_STARTS:
-                p0_local = np.asarray(selected_initial_guess, dtype=float).copy()
-                p0_local[3] = float(depth_start)
-                _append_unique_start(start_vectors, p0_local)
+                for sub_start in _WORKER_SUBSTRATE_STARTS:
+                    p0_local = np.asarray(selected_initial_guess, dtype=float).copy()
+                    p0_local[3] = float(depth_start)
+                    p0_local[4:7] = sub_start
+                    _append_unique_start(start_vectors, p0_local)
         else:
             start_vectors = []
+            _append_unique_start(start_vectors, p0_base)
             for depth_start in _WORKER_DEPTH_STARTS:
-                p0_local = p0_base.copy()
-                p0_local[3] = float(depth_start)
-                start_vectors.append(np.asarray(p0_local, dtype=float))
+                for sub_start in _WORKER_SUBSTRATE_STARTS:
+                    p0_local = p0_base.copy()
+                    p0_local[3] = float(depth_start)
+                    p0_local[4:7] = sub_start
+                    _append_unique_start(start_vectors, p0_local)
         for p0_local in start_vectors:
             res = sb.minimize(
                 _WORKER_OBJECTIVE,
@@ -704,7 +714,7 @@ def analyze_results(x, y, obs_rrs, result_x, nit, success, shallow, result_recor
                 success)
     return x, y, result_recorder
 
-def output_calculation(observed_rrs, objective, siop, result_recorder, image_info, opt_met, relaxed, shallow=False, free_cpu=0, optimize_initial_guesses=False, use_five_initial_guesses=False, fully_relaxed=False):
+def output_calculation(observed_rrs, objective, siop, result_recorder, image_info, opt_met, relaxed, shallow=False, free_cpu=0, optimize_initial_guesses=False, use_five_initial_guesses=False):
     skip_count = 0
 
     observed_rrs = np.asarray(observed_rrs)
@@ -726,19 +736,14 @@ def output_calculation(observed_rrs, objective, siop, result_recorder, image_inf
 
     p0 = (np.array(siop['p_max']) + np.array(siop['p_min'])) / 2
     p0[3] = 10 ** ((math.log10(np.array(siop['p_max'][3])) + math.log10(np.array(siop['p_min'][3]))) / 2)
-    if not relaxed:
-        # Strict mode enforces a convex substrate mixture, so start from a
-        # feasible point instead of the old 0.5/0.5/0.5 seed.
-        p0[4:7] = 1.0 / 3.0
+    p0 = _seed_cover_guess_for_bounds(
+        p0,
+        siop['p_bounds'],
+        relaxed,
+    )
 
-    # set some relaxed abundance constraints (RASC) after Petit et. al.(2017)******
-    if fully_relaxed:
+    if relaxed:
         cons = ()
-    elif relaxed:
-        cons = (
-            {'type': 'ineq', 'fun': constraint_upper_relaxed, 'jac': constraint_upper_relaxed_jac},
-            {'type': 'ineq', 'fun': constraint_lower_relaxed, 'jac': constraint_lower_relaxed_jac}
-        )
     else:
         cons = (
             {'type': 'eq', 'fun': constraint_sum_to_one, 'jac': constraint_sum_to_one_jac},
@@ -791,7 +796,6 @@ def output_calculation(observed_rrs, objective, siop, result_recorder, image_inf
         optimize_initial_guesses,
         use_five_initial_guesses,
         relaxed,
-        fully_relaxed,
         free_cpu=free_cpu,
     ) as pool:
         # Use generator and tqdm on the futures iterator to avoid building large lists
@@ -854,7 +858,6 @@ def rerun_selected_pixels(observed_rrs, objective, siop, result_recorder, pixel_
                           apply_shallow_adjustment=False,
                           allow_target_sum_over_one=False,
                           normalise_target_fractions=False,
-                          fully_relaxed=False,
                           executor=None):
     """Re-optimise only a selected subset of pixels with depth constraints.
 
@@ -937,7 +940,6 @@ def rerun_selected_pixels(observed_rrs, objective, siop, result_recorder, pixel_
             siop,
             opt_met,
             relaxed,
-            fully_relaxed=fully_relaxed,
             free_cpu=free_cpu,
             bathy_tolerance=bathy_tolerance,
             optimize_initial_guesses=optimize_initial_guesses,
@@ -975,19 +977,17 @@ def rerun_selected_pixels(observed_rrs, objective, siop, result_recorder, pixel_
     return result_recorder
 
 
-def _build_rerun_setup(siop, relaxed, fully_relaxed, allow_target_sum_over_one):
+def _build_rerun_setup(siop, relaxed, allow_target_sum_over_one):
     p0 = (np.array(siop['p_max']) + np.array(siop['p_min'])) / 2
     p0[3] = 10 ** ((math.log10(np.array(siop['p_max'][3])) + math.log10(np.array(siop['p_min'][3]))) / 2)
-    if not relaxed:
-        p0[4:7] = 1.0 / 3.0
+    p0 = _seed_cover_guess_for_bounds(
+        p0,
+        siop['p_bounds'],
+        relaxed,
+    )
 
-    if allow_target_sum_over_one or fully_relaxed:
+    if allow_target_sum_over_one or relaxed:
         cons = ()
-    elif relaxed:
-        cons = (
-            {'type': 'ineq', 'fun': constraint_upper_relaxed, 'jac': constraint_upper_relaxed_jac},
-            {'type': 'ineq', 'fun': constraint_lower_relaxed, 'jac': constraint_lower_relaxed_jac}
-        )
     else:
         cons = (
             {'type': 'eq', 'fun': constraint_sum_to_one, 'jac': constraint_sum_to_one_jac},
@@ -995,7 +995,7 @@ def _build_rerun_setup(siop, relaxed, fully_relaxed, allow_target_sum_over_one):
     return p0, cons
 
 
-def create_rerun_worker_pool(objective, siop, opt_met, relaxed, fully_relaxed=False,
+def create_rerun_worker_pool(objective, siop, opt_met, relaxed,
                              free_cpu=0, bathy_tolerance=None,
                              optimize_initial_guesses=False, use_five_initial_guesses=False,
                              apply_shallow_adjustment=False,
@@ -1004,7 +1004,6 @@ def create_rerun_worker_pool(objective, siop, opt_met, relaxed, fully_relaxed=Fa
     p0, cons = _build_rerun_setup(
         siop,
         relaxed,
-        fully_relaxed,
         allow_target_sum_over_one,
     )
     return _create_worker_pool(
@@ -1018,7 +1017,6 @@ def create_rerun_worker_pool(objective, siop, opt_met, relaxed, fully_relaxed=Fa
         optimize_initial_guesses,
         use_five_initial_guesses,
         relaxed,
-        fully_relaxed,
         free_cpu=free_cpu,
         max_tasks=max_tasks,
     )

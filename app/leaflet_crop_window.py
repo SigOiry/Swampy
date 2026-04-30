@@ -336,6 +336,34 @@ def _build_html(payload):
     #toolbar .spacer {{
       flex: 1 1 auto;
     }}
+    #toolbar-options {{
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 2px 0;
+    }}
+    #toolbar-options label {{
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      color: #374151;
+      cursor: pointer;
+      max-width: 420px;
+    }}
+    #toolbar-options input {{
+      margin-top: 1px;
+    }}
+    #toolbar-options .option-text {{
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }}
+    #toolbar-options .option-hint {{
+      font-size: 11px;
+      color: #6b7280;
+      line-height: 1.35;
+    }}
     #summary {{
       padding: 8px 14px;
       font-size: 12px;
@@ -401,6 +429,7 @@ def _build_html(payload):
       <button id="clear-poly-btn" class="warn">Clear polygons</button>
       <button id="import-mask-btn">Import</button>
       <button id="clear-mask-btn" class="warn">Clear mask</button>
+      <div id="toolbar-options"></div>
       <div class="spacer"></div>
       <button id="cancel-btn">Cancel</button>
       <button id="ok-btn" class="primary">OK</button>
@@ -422,6 +451,32 @@ def _build_html(payload):
     const allowPolygons = mode === 'polygons' || payload.allow_polygon === true;
     const allowMaskImport = payload.allow_mask_import !== false && mode === 'crop';
     const hasLeafletDraw = typeof L.Draw !== 'undefined' && L.Draw && L.Draw.Event;
+    const optionCheckboxes = Array.isArray(payload.option_checkboxes)
+      ? payload.option_checkboxes.filter(function(config) {{
+          return config && config.id;
+        }})
+      : [];
+
+    function coerceBool(value, defaultValue) {{
+      if (value === null || value === undefined || value === '') {{
+        return defaultValue;
+      }}
+      if (typeof value === 'boolean') {{
+        return value;
+      }}
+      if (typeof value === 'number') {{
+        return value !== 0;
+      }}
+      const text = String(value).trim().toLowerCase();
+      if (['1', 'true', 'yes', 'on'].includes(text)) {{
+        return true;
+      }}
+      if (['0', 'false', 'no', 'off'].includes(text)) {{
+        return false;
+      }}
+      return defaultValue;
+    }}
+
     let currentBBox = payload.selection && payload.selection.bbox ? payload.selection.bbox : null;
     let currentMaskPath = payload.selection && payload.selection.mask_path ? payload.selection.mask_path : '';
     let currentMaskBuffer = null;
@@ -431,6 +486,12 @@ def _build_html(payload):
     }}
     let currentMaskGeometries = payload.selection && payload.selection.mask_geometries ? payload.selection.mask_geometries : [];
     let currentPolygons = payload.selection && Array.isArray(payload.selection.polygons) ? payload.selection.polygons : [];
+    const optionValues = {{}};
+    optionCheckboxes.forEach(function(config) {{
+      const optionId = String(config.id);
+      const selectionValue = payload.selection ? payload.selection[optionId] : undefined;
+      optionValues[optionId] = coerceBool(selectionValue, coerceBool(config.value, false));
+    }});
 
     const imageBounds = [
       [payload.lat_min, payload.lon_min],
@@ -480,6 +541,9 @@ def _build_html(payload):
         if (element) {{
           element.disabled = !enabled;
         }}
+      }});
+      document.querySelectorAll('.selection-option-checkbox').forEach(function(element) {{
+        element.disabled = !enabled;
       }});
       if (enabled) {{
         map.dragging.enable();
@@ -544,7 +608,63 @@ def _build_html(payload):
       if (currentPolygons.length) {{
         parts.push(`${{currentPolygons.length}} polygon(s)`);
       }}
+      optionCheckboxes.forEach(function(config) {{
+        const optionId = String(config.id);
+        const summaryText = optionValues[optionId]
+          ? String(config.summary_when_true || '').trim()
+          : String(config.summary_when_false || '').trim();
+        if (summaryText) {{
+          parts.push(summaryText);
+        }}
+      }});
       document.getElementById('summary').textContent = parts.length ? parts.join(' | ') : (mode === 'polygons' ? 'No deep-water polygons selected' : 'Full scene');
+    }}
+
+    function configureOptions() {{
+      const container = document.getElementById('toolbar-options');
+      if (!container) {{
+        return;
+      }}
+      if (!optionCheckboxes.length) {{
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+      }}
+      container.style.display = 'flex';
+      container.innerHTML = '';
+      optionCheckboxes.forEach(function(config) {{
+        const optionId = String(config.id);
+        const label = document.createElement('label');
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = optionId;
+        checkbox.className = 'selection-option-checkbox';
+        checkbox.checked = !!optionValues[optionId];
+        checkbox.addEventListener('change', function() {{
+          optionValues[optionId] = checkbox.checked;
+          formatSummary();
+        }});
+
+        const textWrap = document.createElement('span');
+        textWrap.className = 'option-text';
+
+        const labelText = document.createElement('span');
+        labelText.textContent = String(config.label || optionId);
+        textWrap.appendChild(labelText);
+
+        const hintText = String(config.hint || '').trim();
+        if (hintText) {{
+          const hint = document.createElement('span');
+          hint.className = 'option-hint';
+          hint.textContent = hintText;
+          textWrap.appendChild(hint);
+        }}
+
+        label.appendChild(checkbox);
+        label.appendChild(textWrap);
+        container.appendChild(label);
+      }});
     }}
 
     function bboxFromLeaflet(bounds) {{
@@ -784,12 +904,17 @@ def _build_html(payload):
 
     document.getElementById('ok-btn').addEventListener('click', async function() {{
       selectionSubmitted = true;
-      await postJson('/accept', {{
+      const acceptedSelection = {{
         bbox: currentBBox,
         mask_path: currentMaskPath,
         mask_buffer_m: currentMaskBuffer,
         polygons: currentPolygons
+      }};
+      optionCheckboxes.forEach(function(config) {{
+        const optionId = String(config.id);
+        acceptedSelection[optionId] = !!optionValues[optionId];
       }});
+      await postJson('/accept', acceptedSelection);
       document.body.innerHTML = '<p style="font-family: Segoe UI, sans-serif; padding: 24px;">Selection saved. You can close this tab.</p>';
     }});
 
@@ -810,6 +935,7 @@ def _build_html(payload):
     if (currentPolygons.length) {{
       setPolygons(currentPolygons);
     }}
+    configureOptions();
     configureToolbar();
 
     const startupOverlay = document.getElementById('startup-overlay');
