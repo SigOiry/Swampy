@@ -11,3 +11,5 @@ __pycache__/
 # Numba cache
 *.nbc
 *.nbi
+
+generate_auth_config.py

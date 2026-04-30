@@ -29,7 +29,10 @@ import shutil
 import sqlite3
 import tempfile
 
-sys.path.insert(0, os.getcwd())
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+for _path in (os.getcwd(), _REPO_ROOT):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 
 def _resolve_bundled_resource(path):
@@ -217,6 +220,7 @@ import argparse
 import xmltodict
 import sambuca_core as sbc
 from netCDF4 import Dataset
+import auth
 import gui_swampy
 import create_input
 from datetime import datetime
@@ -3384,6 +3388,8 @@ def _write_anomaly_search_debug_geotiffs(ofile, width, height, lat_data, lon_dat
 
 if __name__ == "__main__":
     #try:
+        if not auth.ensure_app_authorized(_REPO_ROOT):
+            sys.exit(1)
         start_time = datetime.now()
         print(f"[DEBUG]: starting at {start_time.isoformat()}")
         parser = argparse.ArgumentParser()
