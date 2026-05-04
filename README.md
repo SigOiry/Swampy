@@ -41,29 +41,30 @@ If you want to do the full installation from the command line:
 git clone https://github.com/SigOiry/Swampy.git
 cd Swampy
 conda env create -f environment.yml
-conda activate SwampySim
+conda activate Swampy2026
 ```
 
 If the repository is already on your machine, you can start directly from the environment setup:
 
 ```powershell
 conda env create -f environment.yml
-conda activate SwampySim
+conda activate Swampy2026
 ```
-The app have an auto-updater. When `python launch_swampy.py` is executed, the app look if the local version match the onmy version of this repository. If not a popup ask the user if he wants to update the app.
+The app have an auto-updater. When `python launch_swampy.py` is executed, the app look if the local version match the onmy version of this repository. If not a popup ask the user if he wants to update the app. The launcher now requires the `Swampy2026` Conda environment and warns if you start it from another environment. If the legacy `SwampySim` environment is still present, the launcher can also offer to remove it.
 This feature might need git and conda to global variable of the system (PATH).
 
 If updater doesn't work for you or if the environment already exists and you want to refresh it:
 
 ```powershell
 conda env update -f environment.yml --prune
-conda activate SwampySim
+conda activate Swampy2026
 ```
 ## ▶️ How To Launch The App
 
 From the repository root:
 
 ```powershell
+conda activate Swampy2026
 python launch_swampy.py
 ```
 
@@ -72,6 +73,7 @@ This opens the graphical interface.
 You can also rerun a saved configuration directly from a log XML:
 
 ```powershell
+conda activate Swampy2026
 python launch_swampy.py -f path\\to\\log_file.xml
 ```
 

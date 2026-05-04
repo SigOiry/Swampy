@@ -14,6 +14,7 @@ Usage (called from launch_swampy.py):
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,10 +31,37 @@ from urllib.error import URLError
 
 GITHUB_REPO = "SigOiry/Swampy"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CONDA_ENV_NAME = "SwampySim"
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 _VERSION_FILE = os.path.join(_REPO_ROOT, "version.txt")
 _ENV_YML = os.path.join(_REPO_ROOT, "environment.yml")
+LEGACY_CONDA_ENV_NAME = "SwampySim"
+DEFAULT_CONDA_ENV_NAME = "Swampy2026"
+_KNOWN_CONDA_ROOT_NAMES = {
+    "miniconda3",
+    "anaconda3",
+    "miniforge3",
+    "mambaforge",
+}
+
+
+def _read_declared_conda_env_name():
+    try:
+        with open(_ENV_YML, encoding="utf-8") as stream:
+            for raw_line in stream:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.lower().startswith("name:"):
+                    value = line.split(":", 1)[1].strip()
+                    if value:
+                        return value
+                    break
+    except OSError:
+        pass
+    return DEFAULT_CONDA_ENV_NAME
+
+
+CONDA_ENV_NAME = _read_declared_conda_env_name()
 
 # ---------------------------------------------------------------------------
 # Version helpers
@@ -170,6 +198,172 @@ def _find_conda():
     return None
 
 
+def get_conda_executable():
+    return _find_conda()
+
+
+def _normalise_env_name(value):
+    if not value:
+        return None
+    value = str(value).strip().strip("\"'")
+    if not value:
+        return None
+    value = value.rstrip("\\/")
+    if not value:
+        return None
+    base = os.path.basename(value)
+    return base or value
+
+
+def _infer_conda_env_name_from_python(python_executable):
+    if not python_executable:
+        return None
+
+    python_dir = os.path.dirname(os.path.abspath(python_executable))
+    candidates = [python_dir]
+
+    dir_name = os.path.basename(python_dir).lower()
+    if dir_name in {"bin", "scripts"}:
+        candidates.append(os.path.dirname(python_dir))
+
+    for prefix in candidates:
+        prefix_name = os.path.basename(prefix)
+        parent_name = os.path.basename(os.path.dirname(prefix)).lower()
+        if parent_name == "envs" and prefix_name:
+            return prefix_name
+        if prefix_name.lower() in _KNOWN_CONDA_ROOT_NAMES:
+            return "base"
+    return None
+
+
+def get_active_conda_env_name(env=None, python_executable=None):
+    env = os.environ if env is None else env
+
+    for key in ("CONDA_DEFAULT_ENV", "CONDA_PREFIX"):
+        name = _normalise_env_name(env.get(key))
+        if name:
+            return name
+
+    return _infer_conda_env_name_from_python(python_executable or sys.executable)
+
+
+def _prepare_subprocess_args(args, shell):
+    if shell:
+        return subprocess.list2cmdline([str(arg) for arg in args])
+    return list(args)
+
+
+def _run_conda_command(conda, args, cwd=None):
+    if not conda:
+        raise RuntimeError("conda executable not found.")
+
+    shell = conda.lower().endswith((".bat", ".cmd"))
+    result = subprocess.run(
+        _prepare_subprocess_args([conda] + list(args), shell),
+        capture_output=True,
+        text=True,
+        cwd=cwd or _REPO_ROOT,
+        shell=shell,
+    )
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout or "").strip()
+        if not output:
+            output = f"Command failed with exit code {result.returncode}."
+        raise RuntimeError(output)
+    return result
+
+
+def find_conda_envs(conda=None):
+    conda = conda or _find_conda()
+    if not conda:
+        return {}
+
+    result = _run_conda_command(conda, ["env", "list", "--json"])
+    data = json.loads(result.stdout or "{}")
+
+    envs = {}
+    for prefix in data.get("envs", []):
+        name = _normalise_env_name(prefix)
+        if name:
+            envs[name] = prefix
+    return envs
+
+
+def remove_conda_env(env_name, conda=None):
+    conda = conda or _find_conda()
+    _run_conda_command(conda, ["env", "remove", "-n", env_name, "-y"])
+
+
+def schedule_conda_env_removal_after_exit(env_name, conda=None, parent_pid=None):
+    conda = conda or _find_conda()
+    if not conda:
+        raise RuntimeError("conda executable not found.")
+
+    parent_pid = int(parent_pid or os.getpid())
+
+    if os.name == "nt":
+        escaped_conda = conda.replace("'", "''")
+        escaped_env_name = env_name.replace("'", "''")
+        command = (
+            f"Wait-Process -Id {parent_pid}; "
+            f"& '{escaped_conda}' env remove -n '{escaped_env_name}' -y"
+        )
+        subprocess.Popen(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                command,
+            ],
+            cwd=_REPO_ROOT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return
+
+    command = (
+        f"while kill -0 {parent_pid} 2>/dev/null; do sleep 1; done; "
+        f"{shlex.quote(conda)} env remove -n {shlex.quote(env_name)} -y "
+        ">/dev/null 2>&1"
+    )
+    subprocess.Popen(["/bin/sh", "-lc", command], cwd=_REPO_ROOT)
+
+
+def _candidate_python_paths(prefix):
+    if os.name == "nt":
+        yield os.path.join(prefix, "python.exe")
+        yield os.path.join(prefix, "Scripts", "python.exe")
+        return
+
+    yield os.path.join(prefix, "bin", "python")
+    yield os.path.join(prefix, "python")
+
+
+def _find_env_python(env_name, conda=None):
+    env_prefix = find_conda_envs(conda).get(env_name)
+    if not env_prefix:
+        return None
+
+    for candidate in _candidate_python_paths(env_prefix):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def build_target_env_launch_command(extra_args=None, conda=None):
+    python_exe = _find_env_python(CONDA_ENV_NAME, conda=conda)
+    if python_exe is None:
+        raise RuntimeError(
+            f"Unable to locate the Python interpreter for the {CONDA_ENV_NAME} conda environment."
+        )
+
+    launcher = os.path.join(_REPO_ROOT, "launch_swampy.py")
+    return [python_exe, launcher] + list(extra_args or [])
+
+
 # ---------------------------------------------------------------------------
 # Update logic (runs in a background thread)
 # ---------------------------------------------------------------------------
@@ -192,7 +386,7 @@ def _run_update_thread(tag, log_cb, done_cb):
     def _cmd(args, shell=False):
         log_cb(f"$ {' '.join(str(a) for a in args)}")
         result = subprocess.run(
-            args,
+            _prepare_subprocess_args(args, shell),
             capture_output=True,
             text=True,
             cwd=_REPO_ROOT,
@@ -210,7 +404,7 @@ def _run_update_thread(tag, log_cb, done_cb):
     def _work():
         try:
             old_env_hash = _md5(_ENV_YML)
-            conda = _find_conda()
+            conda = get_conda_executable()
             if conda is None:
                 raise RuntimeError(
                     "conda not found before applying the update. Start Swampy from "
@@ -243,6 +437,8 @@ def _run_update_thread(tag, log_cb, done_cb):
                  "--prune"],
                 shell=(conda.lower().endswith((".bat", ".cmd"))),
             )
+
+            build_target_env_launch_command(sys.argv[1:], conda=conda)
 
             log_cb("Update complete.")
             done_cb(True)
@@ -429,10 +625,18 @@ def _show_progress_window(tag):
         root.after(0, _do)
 
     def _relaunch():
-        root.destroy()
-        launcher = os.path.join(_REPO_ROOT, "launch_swampy.py")
-        subprocess.Popen([sys.executable, launcher] + sys.argv[1:])
-        sys.exit(0)
+        try:
+            launch_cmd = build_target_env_launch_command(sys.argv[1:])
+            root.destroy()
+            subprocess.Popen(launch_cmd, cwd=_REPO_ROOT)
+            sys.exit(0)
+        except Exception as exc:
+            status_var.set(f"Relaunch failed: {exc}")
+            root.protocol("WM_DELETE_WINDOW", root.destroy)
+            tk.Button(
+                root, text="Close", command=root.destroy,
+                width=10, relief="flat",
+            ).pack(pady=6)
 
     root.protocol("WM_DELETE_WINDOW", lambda: None)  # disable close during update
 
