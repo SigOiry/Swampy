@@ -5301,13 +5301,17 @@ def gui():
                 try:
                     deep_water_polygons_json = _xml_find_text(xml_root, "deep_water_polygons_json", "") or "[]"
                     loaded_polygons = json.loads(deep_water_polygons_json)
+                    deep_water_source_image = (
+                        _xml_find_text(xml_root, "deep_water_source_image", "") or
+                        (loaded_images[0] if loaded_images else "")
+                    )
                     _set_deep_water_selection({
                         "polygons": loaded_polygons,
                         "subsample_pixels": _parse_bool_text(
                             _xml_find_text(xml_root, "deep_water_subsample_pixels"),
                             True,
                         ),
-                        "source_path": loaded_images[0] if loaded_images else _xml_find_text(xml_root, "deep_water_source_image", ""),
+                        "source_path": deep_water_source_image,
                     })
                 except Exception:
                     clear_deep_water_selection()
@@ -5335,14 +5339,14 @@ def gui():
                         "",
                     ) or "[]"
                     loaded_polygons = json.loads(shallow_prior_polygons_json)
+                    shallow_prior_source_image = (
+                        _xml_find_text(xml_root, "shallow_substrate_prior_source_image", "") or
+                        (loaded_images[0] if loaded_images else "")
+                    )
                     _set_shallow_substrate_prior_selection({
                         "target_name": matched_shallow_target or loaded_shallow_target_name,
                         "polygons": loaded_polygons,
-                        "source_path": loaded_images[0] if loaded_images else _xml_find_text(
-                            xml_root,
-                            "shallow_substrate_prior_source_image",
-                            "",
-                        ),
+                        "source_path": shallow_prior_source_image,
                     })
                 except Exception:
                     clear_shallow_substrate_prior_selection()

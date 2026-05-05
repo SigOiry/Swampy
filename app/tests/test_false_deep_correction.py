@@ -504,6 +504,40 @@ def test_parse_deep_water_selection_defaults_subsample_to_true_for_legacy_logs()
     assert selection["subsample_pixels"] is True
 
 
+def test_prepare_scene_prior_runtime_state_clears_stale_prior_values_per_image():
+    xml_dict = {
+        "deep_water_enabled": True,
+        "deep_water_source_image": "scene_01.nc",
+        "deep_water_chl_mean": 9.5,
+        "deep_water_applied_pmin": [9.0, 0.8, 7.5],
+        "deep_water_prior_scene_image": "old_scene.nc",
+        "shallow_substrate_prior_enabled": True,
+        "shallow_substrate_prior_source_image": "scene_01.nc",
+        "shallow_substrate_prior_chl_mean": 1.5,
+        "shallow_substrate_prior_applied_pmax": [2.0, 0.2, 0.4],
+        "shallow_substrate_prior_scene_image": "old_scene.nc",
+    }
+
+    result = swampy._prepare_scene_prior_runtime_state(
+        xml_dict,
+        current_image="scene_02.nc",
+        deep_water_selection={"polygons": [{"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}]},
+        shallow_substrate_prior_selection={"polygons": [{"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}]},
+    )
+
+    assert result is xml_dict
+    assert result["deep_water_enabled"] is True
+    assert result["shallow_substrate_prior_enabled"] is True
+    assert "deep_water_chl_mean" not in result
+    assert "deep_water_applied_pmin" not in result
+    assert "shallow_substrate_prior_chl_mean" not in result
+    assert "shallow_substrate_prior_applied_pmax" not in result
+    assert result["deep_water_source_image"] == "scene_02.nc"
+    assert result["shallow_substrate_prior_source_image"] == "scene_02.nc"
+    assert result["deep_water_prior_scene_image"] == "scene_02.nc"
+    assert result["shallow_substrate_prior_scene_image"] == "scene_02.nc"
+
+
 def test_write_deep_water_iop_raster_writes_successful_estimates(tmp_path):
     rasterio = pytest.importorskip("rasterio")
     output_path = tmp_path / "deep_water_iops.tif"

@@ -251,6 +251,36 @@ _DEEP_WATER_IOP_RELAXED_BOUNDS = (
     (0.001, 1.0),   # CDOM
     (0.005, 8),   # NAP
 )
+_DEEP_WATER_RUNTIME_XML_KEYS = (
+    'deep_water_prior_scene_image',
+    'deep_water_selected_pixel_count',
+    'deep_water_success_pixel_count',
+    'deep_water_iop_raster_path',
+    'deep_water_chl_mean',
+    'deep_water_chl_sd',
+    'deep_water_cdom_mean',
+    'deep_water_cdom_sd',
+    'deep_water_nap_mean',
+    'deep_water_nap_sd',
+    'deep_water_applied_pmin',
+    'deep_water_applied_pmax',
+)
+_SHALLOW_PRIOR_RUNTIME_XML_KEYS = (
+    'shallow_substrate_prior_scene_image',
+    'shallow_substrate_prior_selected_pixel_count',
+    'shallow_substrate_prior_success_pixel_count',
+    'shallow_substrate_prior_accepted_pixel_count',
+    'shallow_substrate_prior_csv_path',
+    'shallow_substrate_prior_min_exp_bottom',
+    'shallow_substrate_prior_chl_mean',
+    'shallow_substrate_prior_chl_sd',
+    'shallow_substrate_prior_cdom_mean',
+    'shallow_substrate_prior_cdom_sd',
+    'shallow_substrate_prior_nap_mean',
+    'shallow_substrate_prior_nap_sd',
+    'shallow_substrate_prior_applied_pmin',
+    'shallow_substrate_prior_applied_pmax',
+)
 DEFAULT_ANOMALY_SEARCH_SETTINGS = {
     'enabled': False,
     'export_local_moran_raster': False,
@@ -448,6 +478,30 @@ def _parse_shallow_substrate_prior_selection(config_root):
         'use_sd_bounds': _coerce_bool(config_root.get('shallow_substrate_prior_use_sd_bounds', False), False),
         'source_image': str(config_root.get('shallow_substrate_prior_source_image', '') or ''),
     }
+
+
+def _prepare_scene_prior_runtime_state(
+    xml_dict,
+    current_image='',
+    deep_water_selection=None,
+    shallow_substrate_prior_selection=None,
+):
+    """Clear stale prior outputs and mark which scene is being recomputed now."""
+    if not isinstance(xml_dict, dict):
+        xml_dict = {}
+
+    for key in _DEEP_WATER_RUNTIME_XML_KEYS:
+        xml_dict.pop(key, None)
+    for key in _SHALLOW_PRIOR_RUNTIME_XML_KEYS:
+        xml_dict.pop(key, None)
+
+    if deep_water_selection:
+        xml_dict['deep_water_source_image'] = str(current_image or '')
+        xml_dict['deep_water_prior_scene_image'] = str(current_image or '')
+    if shallow_substrate_prior_selection:
+        xml_dict['shallow_substrate_prior_source_image'] = str(current_image or '')
+        xml_dict['shallow_substrate_prior_scene_image'] = str(current_image or '')
+    return xml_dict
 
 
 def _dict_item_list(node, key):
@@ -2565,6 +2619,74 @@ def _normalize_bathy_source_crs(src_crs):
     return src_crs, None
 
 
+def _bathy_crs_matches_image(src_crs, image_crs):
+    """Return True when the bathymetry and image use the same CRS."""
+    if src_crs is None or image_crs is None:
+        return False
+    try:
+        return src_crs == image_crs
+    except Exception:
+        pass
+    try:
+        return CRS.from_user_input(src_crs) == CRS.from_user_input(image_crs)
+    except Exception:
+        return False
+
+
+def _load_bathy_raster_to_image_grid(src, width, height, dst_transform, dst_crs):
+    """Load bathymetry onto the image grid, reprojecting only when CRS differs."""
+    from rasterio.warp import reproject, Resampling
+
+    src_crs, crs_note = _normalize_bathy_source_crs(src.crs)
+    if src_crs is None:
+        raise RuntimeError(
+            "Bathymetry raster has no CRS. Please provide a georeferenced GeoTIFF."
+        )
+    if crs_note is not None:
+        print(f"[INFO]: Interpreting bathymetry CRS '{src.crs}' as {crs_note}.")
+
+    nodata = src.nodata if src.nodata is not None else np.nan
+
+    if _bathy_crs_matches_image(src_crs, dst_crs):
+        left, bottom, right, top = rasterio.transform.array_bounds(
+            height,
+            width,
+            dst_transform,
+        )
+        window = rasterio.windows.from_bounds(
+            left,
+            bottom,
+            right,
+            top,
+            transform=src.transform,
+        )
+        fill_value = float(nodata) if np.isfinite(nodata) else np.nan
+        dest = src.read(
+            1,
+            window=window,
+            out_shape=(height, width),
+            boundless=True,
+            fill_value=fill_value,
+            resampling=Resampling.bilinear,
+        ).astype('float32', copy=False)
+    else:
+        dest = np.empty((height, width), dtype='float32')
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=dest,
+            src_transform=src.transform,
+            src_crs=src_crs,
+            dst_transform=dst_transform,
+            dst_crs=dst_crs,
+            resampling=Resampling.bilinear,
+            num_threads=2,
+        )
+
+    if np.isfinite(nodata):
+        dest = np.where(dest == nodata, np.nan, dest)
+    return dest
+
+
 def _convert_hydrographic_zero_bathy_to_depth(bathy_elevation, water_level_correction=0.0):
     """Convert a hydrographic-zero-referenced elevation raster into depth.
 
@@ -4057,8 +4179,8 @@ if __name__ == "__main__":
                 os.makedirs(version_output_dir, exist_ok=True)
             siop_xml_path = run_version.get('siop_xml_path', siop_xml_path)
             file_sensor = run_version.get('file_sensor', file_sensor)
-            pmin = np.asarray(run_version.get('pmin', pmin), dtype=float)
-            pmax = np.asarray(run_version.get('pmax', pmax), dtype=float)
+            pmin = np.array(run_version.get('pmin', pmin), dtype=float, copy=True)
+            pmax = np.array(run_version.get('pmax', pmax), dtype=float, copy=True)
             above_rrs_flag = _coerce_bool(run_version.get('above_rrs_flag', above_rrs_flag), above_rrs_flag)
             reflectance_input_flag = _coerce_bool(run_version.get('reflectance_input_flag', reflectance_input_flag), reflectance_input_flag)
             relaxed = _coerce_bool(run_version.get('relaxed', relaxed), relaxed)
@@ -4110,6 +4232,12 @@ if __name__ == "__main__":
             xml_dict['run_version_label'] = version_label
             xml_dict['run_version_suffix'] = run_version_suffix
             xml_dict['run_version_output_folder'] = os.path.dirname(ofile)
+            xml_dict = _prepare_scene_prior_runtime_state(
+                xml_dict,
+                current_image=file_im,
+                deep_water_selection=deep_water_selection,
+                shallow_substrate_prior_selection=shallow_substrate_prior_selection,
+            )
             source_product = Dataset(file_im, 'r')  # read the product
 
             rrs = None
@@ -4434,6 +4562,10 @@ if __name__ == "__main__":
                 and shallow_prior_lon_full is not None
             ):
                 try:
+                    print(
+                        "[INFO]: Recomputing shallow-water substrate priors from user polygons "
+                        f"for current scene: {input_name}"
+                    )
                     shallow_target_index, shallow_target_name = _resolve_shallow_substrate_target_index(
                         shallow_substrate_prior_selection,
                         siop.get('substrate_names', []),
@@ -4602,6 +4734,10 @@ if __name__ == "__main__":
             deep_water_successful_estimates = []
             if deep_water_selection and deep_water_rrs_full is not None and deep_water_lat_full is not None and deep_water_lon_full is not None:
                 try:
+                    print(
+                        "[INFO]: Recomputing deep-water priors from user polygons "
+                        f"for current scene: {input_name}"
+                    )
                     deep_water_mask = _rasterize_epsg4326_geometries(
                         deep_water_selection.get('polygons') or [],
                         deep_water_lat_full,
@@ -4866,9 +5002,6 @@ if __name__ == "__main__":
             bathy_tol = 0.0
             if bathy_path:
                 try:
-                    from rasterio.warp import reproject, Resampling
-                    import rasterio
-
                     transform, crs = _derive_transform_crs(
                         width,
                         height,
@@ -4878,26 +5011,13 @@ if __name__ == "__main__":
                         geo_metadata.get('grid_metadata'))
 
                     with rasterio.open(bathy_path) as src:
-                        dest = np.empty((height, width), dtype='float32')
-                        src_crs, crs_note = _normalize_bathy_source_crs(src.crs)
-                        if src_crs is None:
-                            raise RuntimeError(
-                                "Bathymetry raster has no CRS. Please provide a georeferenced GeoTIFF."
-                            )
-                        if crs_note is not None:
-                            print(f"[INFO]: Interpreting bathymetry CRS '{src.crs}' as {crs_note}.")
-                        reproject(
-                            source=rasterio.band(src, 1),
-                            destination=dest,
-                            src_transform=src.transform,
-                            src_crs=src_crs,
-                            dst_transform=transform,
-                            dst_crs=crs,
-                            resampling=Resampling.bilinear,
-                            num_threads=2,
+                        dest = _load_bathy_raster_to_image_grid(
+                            src,
+                            width,
+                            height,
+                            transform,
+                            crs,
                         )
-                        nodata = src.nodata if src.nodata is not None else np.nan
-                        dest = np.where(np.isfinite(nodata) & (dest == nodata), np.nan, dest)
 
                     normalized_reference = bathy_reference.replace('-', '_').replace(' ', '_')
                     if normalized_reference in ('hydrographic_zero', 'zh'):
